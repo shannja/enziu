@@ -81,7 +81,7 @@ export function CustomerMode() {
           >
             <h1 className="text-4xl md:text-5xl font-normal mb-4 font-display">
               Understand what you{" "}
-              <span className="text-gradient">actually bought</span>
+              <span className="text-gradient font-bold">actually bought</span>
             </h1>
             <p className="text-xl text-muted-foreground mb-8 max-w-2xl mx-auto">
               Upload your insurance policy. Get instant clarity with scored, cited,

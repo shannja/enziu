@@ -63,9 +63,8 @@ export function CustomerDropzone({ onFileUploaded }: CustomerDropzoneProps) {
               initial={{ scale: 0.8, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               transition={{ duration: 0.3 }}
-              className="w-16 h-16 rounded-full bg-brand-amber/20 flex items-center justify-center"
             >
-              <FileText className="w-8 h-8 text-brand-amber" />
+              <FileText className="w-8 h-8 text-gradient" />
             </motion.div>
             <div>
               <p className="text-lg font-medium">{selectedFile.name}</p>
@@ -88,9 +87,8 @@ export function CustomerDropzone({ onFileUploaded }: CustomerDropzoneProps) {
               initial={{ scale: 0.8, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               transition={{ duration: 0.3 }}
-              className="w-16 h-16 rounded-full bg-secondary flex items-center justify-center"
             >
-              <Upload className="w-8 h-8 text-brand-amber" />
+              <Upload className="w-8 h-8 text-gradient" />
             </motion.div>
             <div>
               <p className="text-lg font-medium">

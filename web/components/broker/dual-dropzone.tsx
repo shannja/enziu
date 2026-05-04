@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useState, useEffect } from "react";
 import { useDropzone } from "react-dropzone";
 import { Upload, FileText, X, Check } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -60,12 +60,35 @@ export function BrokerDropzone({ onFileUploaded, onFileRemoved }: DualDropzonePr
   const removeFile = (policy: "A" | "B") => {
     if (policy === "A") {
       setPolicyAFile(null);
+      setIsUploadingA(false);
     } else {
       setPolicyBFile(null);
+      setIsUploadingB(false);
     }
     // Notify parent component
     onFileRemoved?.(policy);
   };
+
+  // Reset uploading state when file is successfully uploaded
+  useEffect(() => {
+    if (policyAFile) {
+      // Small delay to show uploading state briefly
+      const timer = setTimeout(() => {
+        setIsUploadingA(false);
+      }, 500);
+      return () => clearTimeout(timer);
+    }
+  }, [policyAFile]);
+
+  useEffect(() => {
+    if (policyBFile) {
+      // Small delay to show uploading state briefly
+      const timer = setTimeout(() => {
+        setIsUploadingB(false);
+      }, 500);
+      return () => clearTimeout(timer);
+    }
+  }, [policyBFile]);
 
   return (
     <motion.div
@@ -150,9 +173,8 @@ function DropzoneCard({
             initial={{ scale: 0.8, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
             transition={{ duration: 0.3 }}
-            className="w-12 h-12 rounded-full bg-brand-amber/20 flex items-center justify-center"
           >
-            <Check className="w-6 h-6 text-brand-amber" />
+            <Check className="w-8 h-8 text-gradient" />
           </motion.div>
           <div>
             <p className="text-base font-medium">{label}</p>
@@ -176,7 +198,7 @@ function DropzoneCard({
         </div>
       ) : isUploading ? (
         <div className="flex flex-col items-center gap-3">
-          <div className="w-12 h-12 rounded-full bg-secondary flex items-center justify-center">
+          <div className="w-8 h-8 flex items-center justify-center">
             <div className="w-6 h-6 border-2 border-brand-amber border-t-transparent rounded-full animate-spin" />
           </div>
           <p className="text-sm text-muted-foreground">Uploading...</p>
@@ -187,9 +209,8 @@ function DropzoneCard({
             initial={{ scale: 0.8, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
             transition={{ duration: 0.3 }}
-            className="w-12 h-12 rounded-full bg-secondary flex items-center justify-center"
           >
-            <Upload className="w-6 h-6 text-brand-amber" />
+            <Upload className="w-8 h-8 text-gradient" />
           </motion.div>
           <div>
             <p className="text-base font-medium">{label}</p>

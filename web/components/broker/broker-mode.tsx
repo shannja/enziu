@@ -119,7 +119,7 @@ export function BrokerMode() {
           >
             <h1 className="text-4xl md:text-5xl font-normal mb-4 font-display">
               Compare Policies{" "}
-              <span className="text-gradient">Side by Side</span>
+              <span className="text-gradient font-bold">Side by Side</span>
             </h1>
             <p className="text-xl text-muted-foreground mb-8 max-w-2xl mx-auto">
               Upload two insurance policies and get data-backed comparisons.
