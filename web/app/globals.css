@@ -1,0 +1,169 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 0%;
+    --foreground: 0 0% 100%;
+    --card: 0 0% 4%;
+    --card-foreground: 0 0% 100%;
+    --popover: 0 0% 4%;
+    --popover-foreground: 0 0% 100%;
+    --primary: 43 100% 50%;
+    --primary-foreground: 0 0% 0%;
+    --secondary: 0 0% 12%;
+    --secondary-foreground: 0 0% 100%;
+    --muted: 0 0% 12%;
+    --muted-foreground: 0 0% 64%;
+    --accent: 43 100% 50%;
+    --accent-foreground: 0 0% 0%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 0 0% 16%;
+    --input: 0 0% 16%;
+    --ring: 43 100% 50%;
+    --radius: 0.5rem;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-feature-settings: "rlig" 1, "calt" 1;
+  }
+}
+
+/* Custom scrollbar for dark mode */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #0a0a0a;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #333;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #444;
+}
+
+/* PDF viewer overrides */
+.react-pdf__Page {
+  margin: 0 auto;
+}
+
+.react-pdf__Page__canvas {
+  margin: 0 auto;
+  border-radius: 4px;
+}
+
+/* Grade color utilities */
+.grade-a {
+  color: #22C55E;
+}
+
+.grade-b {
+  color: #84CC16;
+}
+
+.grade-c {
+  color: #EAB308;
+}
+
+.grade-d {
+  color: #F97316;
+}
+
+.grade-f {
+  color: #EF4444;
+}
+
+/* Amber glow effect */
+.amber-glow {
+  box-shadow: 0 0 20px rgba(255, 191, 0, 0.3);
+}
+
+.amber-glow:hover {
+  box-shadow: 0 0 30px rgba(255, 191, 0, 0.5);
+}
+
+/* Dropzone animation */
+.dropzone-active {
+  animation: pulse-amber 2s infinite;
+}
+
+@keyframes pulse-amber {
+  0%, 100% {
+    border-color: rgba(255, 191, 0, 0.5);
+    box-shadow: 0 0 20px rgba(255, 191, 0, 0.2);
+  }
+  50% {
+    border-color: rgba(255, 191, 0, 1);
+    box-shadow: 0 0 40px rgba(255, 191, 0, 0.4);
+  }
+}
+
+/* Split view divider */
+.split-divider {
+  background: linear-gradient(to bottom, transparent, #FFBF00, transparent);
+  width: 2px;
+  cursor: col-resize;
+}
+
+/* Policy pill toggle */
+.policy-pill {
+  transition: all 0.2s ease;
+}
+
+.policy-pill.active {
+  background: #FFBF00;
+  color: #000000;
+  font-weight: 600;
+}
+
+/* Verdict bar */
+.verdict-bar {
+  background: linear-gradient(90deg, #FFBF00 0%, transparent 100%);
+  height: 4px;
+  border-radius: 2px;
+}
+
+/* Bento card hover */
+.bento-card {
+  transition: all 0.3s ease;
+}
+
+.bento-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 30px rgba(255, 191, 0, 0.15);
+}
+
+/* Loading shimmer */
+.shimmer {
+  background: linear-gradient(
+    90deg,
+    #1a1a1a 0%,
+    #2a2a2a 50%,
+    #1a1a1a 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
