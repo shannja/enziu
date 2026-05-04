@@ -71,7 +71,7 @@ export function Footer() {
           </p>
           <Link
             href="/contact"
-            className="px-8 py-3 text-sm font-semibold rounded-full text-black bg-brand-gradient hover:opacity-90 transition-opacity duration-200 shadow-lg shadow-brand-amber/10"
+            className="px-8 py-3 text-sm font-semibold rounded-full text-foreground font-bold bg-brand-gradient hover:opacity-90 transition-opacity duration-200 shadow-lg shadow-brand-amber/10"
           >
             Contact Support
           </Link>

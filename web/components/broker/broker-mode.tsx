@@ -129,10 +129,11 @@ export function BrokerMode() {
             <div className="mt-6">
               <Link
                 href="/recover-voucher"
-                className="text-sm text-brand-amber underline underline-offset-4 hover:text-foreground transition-all duration-200"
+                className="relative text-sm text-gradient font-medium transition-all duration-200 group"
               >
                 Forgot voucher code?
-              </Link>
+                <span className="absolute left-0 bottom-0 w-full h-[1px] bg-brand-gradient transition-transform duration-200 origin-left scale-x-0 group-hover:scale-x-100" />
+                </Link>
             </div>
           </motion.div>
         )}
