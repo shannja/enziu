@@ -1,7 +1,7 @@
 "use client";
 
 import { Card, CardContent } from "@/components/ui/card";
-import { Scale, Trophy, Handshake } from "lucide-react";
+import { Scale, Trophy, Equal } from "lucide-react";
 import { getGradeColor } from "@/lib/utils";
 import type { AnalysisResult } from "@/types";
 
@@ -40,7 +40,7 @@ export function VerdictBar({ policyA, policyB }: VerdictBarProps) {
         <div className="text-center mb-6">
           {winner === "tie" ? (
             <div className="flex items-center justify-center gap-2 text-muted-foreground">
-              <Handshake className="w-5 h-5" />
+              <Equal className="w-5 h-5" />
               <span className="font-medium">It's a tie!</span>
               <span className="text-sm">Both policies scored the same</span>
             </div>

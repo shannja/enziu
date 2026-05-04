@@ -17,6 +17,11 @@ const config: Config = {
       },
     },
     extend: {
+      fontFamily: {
+        display: ["var(--font-display)", "serif"],
+        body: ["var(--font-body)", "sans-serif"],
+        mono: ["JetBrains Mono", "monospace"],
+      },
       colors: {
         border: "hsl(var(--border))",
         input: "hsl(var(--input))",
@@ -53,21 +58,17 @@ const config: Config = {
         },
         // ENZIU Brand Colors
         brand: {
-          // Amber Asterisk - Primary brand color
           amber: "#FFBF00",
           amberLight: "#FFD54F",
           amberDark: "#FF8F00",
-          // Black background
           black: "#000000",
-          // White for text
           white: "#FFFFFF",
-          // Grade colors
           grade: {
-            a: "#22C55E", // Green
-            b: "#84CC16", // Lime
-            c: "#EAB308", // Yellow
-            d: "#F97316", // Orange
-            f: "#EF4444", // Red
+            a: "#22C55E",
+            b: "#84CC16",
+            c: "#EAB308",
+            d: "#F97316",
+            f: "#EF4444",
           },
         },
       },
@@ -76,19 +77,7 @@ const config: Config = {
         md: "calc(var(--radius) - 2px)",
         sm: "calc(var(--radius) - 4px)",
       },
-      fontFamily: {
-        sans: ["var(--font-inter)", "system-ui", "sans-serif"],
-        mono: ["var(--font-mono)", "monospace"],
-      },
       keyframes: {
-        "accordion-down": {
-          from: { height: "0" },
-          to: { height: "var(--radix-accordion-content-height)" },
-        },
-        "accordion-up": {
-          from: { height: "var(--radix-accordion-content-height)" },
-          to: { height: "0" },
-        },
         "fade-in": {
           from: { opacity: "0" },
           to: { opacity: "1" },
@@ -97,21 +86,17 @@ const config: Config = {
           from: { transform: "translateY(20px)", opacity: "0" },
           to: { transform: "translateY(0)", opacity: "1" },
         },
-        pulse: {
-          "0%, 100%": { opacity: "1" },
-          "50%": { opacity: "0.5" },
-        },
       },
       animation: {
-        "accordion-down": "accordion-down 0.2s ease-out",
-        "accordion-up": "accordion-up 0.2s ease-out",
         "fade-in": "fade-in 0.3s ease-out",
         "slide-up": "slide-up 0.4s ease-out",
-        pulse: "pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite",
+      },
+      backgroundImage: {
+        'brand-gradient': 'linear-gradient(90deg, #ffde59 0%, #ff914d 100%)',
       },
     },
   },
-  plugins: [require("tailwindcss-animate")],
+  plugins: [],
 };
 
 export default config;

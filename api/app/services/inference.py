@@ -9,9 +9,11 @@ Provides:
 - Comparative analysis for brokers
 """
 
+from __future__ import annotations
+
 import json
 import time
-from typing import Dict, Any, Optional
+from typing import Any
 
 import httpx
 
@@ -110,11 +112,11 @@ class NScaleClient:
     Handles all inference operations for ENZIU analysis.
     """
     
-    def __init__(self):
+    def __init__(self) -> None:
         self.api_key = settings.nscale_api_key
         self.api_base = settings.nscale_api_base
         self.model = settings.nscale_model
-        self.headers = {
+        self.headers: dict[str, str] = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
@@ -138,7 +140,7 @@ class NScaleClient:
         Returns:
             Generated text response
         """
-        payload = {
+        payload: dict[str, Any] = {
             "model": self.model,
             "messages": [
                 {"role": "system", "content": system_prompt},
@@ -160,7 +162,7 @@ class NScaleClient:
     
     async def analyze_sneak_peek(
         self, extracted_text: str, session_id: str
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Generate a sneak peek analysis (free preview).
         
@@ -190,7 +192,7 @@ Analysis:"""
             if response_text.endswith("```"):
                 response_text = response_text[:-3]
             
-            analysis = json.loads(response_text.strip())
+            analysis: dict[str, Any] = json.loads(response_text.strip())
             
             return {
                 "grade": analysis.get("grade", {
@@ -206,7 +208,7 @@ Analysis:"""
                 ][:3],
                 "summary": analysis.get("summary", ""),
             }
-            
+        
         except (json.JSONDecodeError, Exception) as e:
             # Return placeholder analysis on error
             return {
@@ -223,7 +225,7 @@ Analysis:"""
     
     async def analyze_policy(
         self, extracted_text: str, session_id: str
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Generate full policy analysis (paid feature).
         
@@ -249,7 +251,7 @@ Analysis:"""
             if response_text.endswith("```"):
                 response_text = response_text[:-3]
             
-            analysis = json.loads(response_text.strip())
+            analysis: dict[str, Any] = json.loads(response_text.strip())
             
             return {
                 "grade": analysis.get("grade"),
@@ -261,8 +263,8 @@ Analysis:"""
                 "summary": analysis.get("summary"),
                 "detailedFlags": analysis.get("redFlags", []),
             }
-            
-        except Exception as e:
+        
+        except Exception:
             return {
                 "grade": {
                     "overall": "C",
@@ -277,7 +279,7 @@ Analysis:"""
     
     async def chat(
         self, session_id: str, message: str
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Deep Dive Q&A for a single policy.
         """
@@ -295,7 +297,7 @@ Analysis:"""
         )
         
         # Extract page number if mentioned
-        page = None
+        page: int | None = None
         if "page " in response.lower():
             try:
                 page_str = response.lower().split("page ")[1].split()[0]
@@ -313,9 +315,9 @@ Analysis:"""
         self,
         session_id: str,
         message: str,
-        policyA: Dict[str, Any],
-        policyB: Dict[str, Any],
-    ) -> Dict[str, Any]:
+        policyA: dict[str, Any],
+        policyB: dict[str, Any],
+    ) -> dict[str, Any]:
         """
         Comparative analysis for broker mode.
         """
@@ -337,7 +339,7 @@ Analysis:"""
             "disclaimer": "page X — not legal advice",
         }
     
-    async def store_session(self, session_id: str, data: Dict[str, Any]):
+    async def store_session(self, session_id: str, data: dict[str, Any]) -> None:
         """
         Store session data in Redis.
         
@@ -347,7 +349,7 @@ Analysis:"""
         # TODO: Implement Redis storage
         pass
     
-    async def end_session(self, session_id: str):
+    async def end_session(self, session_id: str) -> None:
         """
         End session and wipe all data.
         """

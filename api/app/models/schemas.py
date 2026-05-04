@@ -3,6 +3,8 @@ ENZIU Pydantic Models / Schemas
 All request/response models for the API.
 """
 
+from __future__ import annotations
+
 from pydantic import BaseModel, Field
 from typing import Optional, Literal
 
@@ -34,7 +36,7 @@ class Clause(BaseModel):
     page: int
     text: str
     plainEnglish: str
-    concern: Optional[str] = None
+    concern: str | None = None
 
 
 # ===========================================
@@ -48,8 +50,8 @@ class AnalysisResult(BaseModel):
     topRisk: str
     redFlags: list[str]
     summary: str
-    detailedFlags: Optional[list[RedFlag]] = None
-    clauses: Optional[list[Clause]] = None
+    detailedFlags: list[RedFlag] | None = None
+    clauses: list[Clause] | None = None
 
 
 class UploadResponse(BaseModel):
@@ -74,7 +76,7 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     """Response from Deep Dive chat."""
     response: str
-    page: Optional[int] = None
+    page: int | None = None
     disclaimer: str = "page X — not legal advice"
 
 
@@ -105,9 +107,9 @@ class VoucherValidationRequest(BaseModel):
 class VoucherValidationResponse(BaseModel):
     """Response from voucher validation."""
     valid: bool
-    credits: Optional[int] = None
-    packType: Optional[str] = None
-    error: Optional[str] = None
+    credits: int | None = None
+    packType: str | None = None
+    error: str | None = None
 
 
 class VoucherRecoveryRequest(BaseModel):

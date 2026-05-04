@@ -27,7 +27,7 @@ declare global {
           items: Array<{ priceId: string; quantity?: number }>;
           customer?: { email?: string };
           customData?: Record<string, unknown>;
-        }): void;
+        }) => void;
       };
       Events?: {
         subscribe: (eventType: string, callback: (event: unknown) => void) => void;
@@ -52,7 +52,12 @@ export function PaddleCheckout({
     script.async = true;
     script.onload = () => {
       if (window.Paddle) {
-        window.Paddle.initialize(process.env.NEXT_PUBLIC_PADDLE_CLIENT_TOKEN || "");
+        const clientToken = process.env.NEXT_PUBLIC_PADDLE_CLIENT_TOKEN;
+        if (!clientToken) {
+          console.error("Paddle client token not configured");
+          return;
+        }
+        window.Paddle.initialize(clientToken);
         window.Paddle.Environment.set("sandbox");
         setIsPaddleLoaded(true);
       }
@@ -71,6 +76,8 @@ export function PaddleCheckout({
 
     // In production, you would create a checkout on your server first
     // and get a real price ID. For now, we simulate the flow.
+    const priceId = process.env.NEXT_PUBLIC_PADDLE_PRICE_ID || "pri_0123456789";
+    
     window.Paddle.Checkout.open({
       settings: {
         mode: "payment",
@@ -78,8 +85,7 @@ export function PaddleCheckout({
       },
       items: [
         {
-          // This would be a real price ID from your Paddle dashboard
-          priceId: process.env.NEXT_PUBLIC_PADDLE_PRICE_ID || "pri_0123456789",
+          priceId: priceId,
           quantity: 1,
         },
       ],

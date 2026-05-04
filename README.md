@@ -10,7 +10,7 @@ ENZIU is an insurance transparency engine with a "Stateless" and "Zero-Footprint
 
 ```
 enziu/
-├── web/                    # Next.js 14+ Frontend (TypeScript)
+├── web/                    # Next.js 15+ Frontend (TypeScript)
 │   ├── app/               # App Router pages
 │   ├── components/        # React components
 │   │   ├── ui/           # Shadcn/UI components
@@ -20,7 +20,7 @@ enziu/
 │   ├── types/            # TypeScript definitions
 │   └── tailwind.config.ts # Tailwind with Amber brand
 │
-├── api/                    # FastAPI Backend (Python)
+├── api/                    # FastAPI Backend (Python 3.11+)
 │   └── app/
 │       ├── main.py        # FastAPI app with /upload endpoint
 │       ├── config.py      # Configuration management
@@ -30,6 +30,9 @@ enziu/
 │       │   └── voucher.py        # HMAC + bcrypt validation
 │       └── models/
 │           └── schemas.py        # Pydantic models
+│
+├── .github/
+│   └── workflows/         # CI/CD pipelines
 │
 ├── assets/                 # Branding
 │   └── logo/
@@ -59,17 +62,18 @@ enziu/
 
 | Layer | Technology |
 |-------|------------|
-| Frontend | Next.js 14+ on Vercel |
+| Frontend | Next.js 15+ on Vercel |
 | Styling | Tailwind CSS + Shadcn/UI |
-| Backend | FastAPI on Railway |
+| Backend | FastAPI 0.115+ on Railway |
 | Inference | NScale (Llama 3.3 70B) |
 | State | Upstash Redis |
 | Payments | Paddle Billing |
+| CI/CD | GitHub Actions |
 
 ## Getting Started
 
 ### Prerequisites
-- Node.js 18+
+- Node.js 20+
 - Python 3.11+
 - Poetry (for Python dependencies)
 
@@ -94,6 +98,7 @@ poetry run uvicorn app.main:app --reload
 ### Environment Variables
 
 See `.env.example` for all required variables:
+
 - `NSCALE_API_KEY` — NScale inference API key
 - `UPSTASH_REDIS_REST_URL` — Upstash Redis URL
 - `UPSTASH_REDIS_REST_TOKEN` — Upstash Redis token
@@ -107,6 +112,48 @@ See `.env.example` for all required variables:
 - **HMAC validation**: Fast rejection of fake voucher codes
 - **Session cleanup**: Data wiped when tab closes
 - **Not legal advice**: Every response includes disclaimer
+- **Modern security headers**: HSTS, CSP, COEP, COOP enabled
+
+## Development
+
+### Running Tests
+
+```bash
+# Python tests
+cd api
+poetry run pytest
+
+# TypeScript type checking
+cd web
+npm run type-check
+
+# Linting
+npm run lint
+```
+
+### Code Quality Tools
+
+- **Python**: Black (formatting), Ruff (linting), MyPy (type checking)
+- **TypeScript**: ESLint 9+, TypeScript 5.5+ strict mode
+
+## Deployment
+
+### Frontend (Vercel)
+1. Connect your GitHub repository
+2. Set environment variables
+3. Deploy automatically on push
+
+### Backend (Railway)
+1. Connect your GitHub repository
+2. Set environment variables
+3. Deploy with `railway up`
+
+### Docker Deployment
+```bash
+# Build and run with Docker
+docker build -t enziu-api ./api
+docker run -p 8000:8000 --env-file .env enziu-api
+```
 
 ## Legal Disclaimer
 
@@ -114,4 +161,8 @@ ENZIU provides analysis, not legal advice. All outputs are scores, citations, an
 
 ## License
 
-© 2024 ENZIU. All rights reserved.
+© 2024-2026 ENZIU. All rights reserved.
+
+---
+
+**Website**: [enziu.com](https://enziu.com)

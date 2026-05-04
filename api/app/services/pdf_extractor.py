@@ -6,8 +6,10 @@ ZERO DISK WRITE: All processing happens in memory using io.BytesIO.
 No document content is ever written to disk.
 """
 
+from __future__ import annotations
+
 import io
-from typing import Dict, List, Any
+from typing import Any
 
 try:
     import fitz  # PyMuPDF
@@ -24,7 +26,7 @@ class PDFExtractor:
     All operations use io.BytesIO buffers - no files are written to disk.
     """
     
-    def __init__(self, max_pages: int = 100):
+    def __init__(self, max_pages: int = 100) -> None:
         """
         Initialize the PDF extractor.
         
@@ -50,7 +52,7 @@ class PDFExtractor:
             # Limit pages for safety
             pages_to_extract = min(len(doc), self.max_pages)
             
-            text_parts = []
+            text_parts: list[str] = []
             for page_num in range(pages_to_extract):
                 page = doc[page_num]
                 text = page.get_text("text")
@@ -58,12 +60,12 @@ class PDFExtractor:
                     text_parts.append(f"[Page {page_num + 1}]\n{text}")
             
             return "\n\n".join(text_parts)
-            
+        
         finally:
             # Close document - no files left open
             doc.close()
     
-    def extract_text_by_page(self, buffer: io.BytesIO) -> Dict[int, str]:
+    def extract_text_by_page(self, buffer: io.BytesIO) -> dict[int, str]:
         """
         Extract text organized by page number.
         
@@ -77,7 +79,7 @@ class PDFExtractor:
         
         try:
             pages_to_extract = min(len(doc), self.max_pages)
-            result = {}
+            result: dict[int, str] = {}
             
             for page_num in range(pages_to_extract):
                 page = doc[page_num]
@@ -86,13 +88,13 @@ class PDFExtractor:
                     result[page_num + 1] = text
             
             return result
-            
+        
         finally:
             doc.close()
     
     def extract_with_positions(
         self, buffer: io.BytesIO
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Extract text with position information for highlighting.
         
@@ -106,7 +108,7 @@ class PDFExtractor:
         
         try:
             pages_to_extract = min(len(doc), self.max_pages)
-            result = []
+            result: list[dict[str, Any]] = []
             
             for page_num in range(pages_to_extract):
                 page = doc[page_num]
@@ -127,9 +129,9 @@ class PDFExtractor:
                                         "font": span["font"],
                                         "size": span["size"],
                                     })
-            
+        
             return result
-            
+        
         finally:
             doc.close()
     
@@ -152,7 +154,7 @@ class PDFExtractor:
     
     def search_text(
         self, buffer: io.BytesIO, search_term: str
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Search for text within the PDF and return positions.
         
@@ -167,7 +169,7 @@ class PDFExtractor:
         
         try:
             pages_to_extract = min(len(doc), self.max_pages)
-            matches = []
+            matches: list[dict[str, Any]] = []
             
             for page_num in range(pages_to_extract):
                 page = doc[page_num]
@@ -188,6 +190,6 @@ class PDFExtractor:
                     })
             
             return matches
-            
+        
         finally:
             doc.close()

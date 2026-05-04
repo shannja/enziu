@@ -2,6 +2,7 @@
 
 import { cn } from "@/lib/utils";
 import { getGradeColor } from "@/lib/utils";
+import { motion } from "framer-motion";
 
 interface PolicyPillToggleProps {
   activePolicy: "A" | "B";
@@ -17,46 +18,55 @@ export function PolicyPillToggle({
   policyBGrade,
 }: PolicyPillToggleProps) {
   return (
-    <div className="flex items-center justify-center gap-4">
-      <button
-        onClick={() => onPolicyChange("A")}
-        className={cn(
-          "policy-pill px-6 py-3 rounded-full font-medium transition-all flex items-center gap-2",
-          activePolicy === "A"
-            ? "bg-brand-amber text-black shadow-lg shadow-brand-amber/20"
-            : "bg-secondary text-muted-foreground hover:text-white"
-        )}
-      >
-        <span>Policy A</span>
-        <span
+    <motion.div
+      initial={{ opacity: 0, y: -10 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.3 }}
+      className="flex items-center justify-center"
+    >
+      <div className="inline-flex items-center gap-2 bg-secondary rounded-full p-1">
+        <motion.button
+          layoutId="activePill"
+          onClick={() => onPolicyChange("A")}
           className={cn(
-            "text-sm font-bold",
-            activePolicy === "A" ? "text-black" : getGradeColor(policyAGrade)
+            "px-6 py-3 rounded-full font-medium transition-colors duration-200 flex items-center gap-2",
+            activePolicy === "A"
+              ? "bg-background text-foreground shadow-sm"
+              : "text-muted-foreground hover:text-foreground"
           )}
         >
-          {policyAGrade}
-        </span>
-      </button>
+          <span>Policy A</span>
+          <span
+            className={cn(
+              "text-sm font-bold",
+              activePolicy === "A" ? "text-foreground" : getGradeColor(policyAGrade)
+            )}
+          >
+            {policyAGrade}
+          </span>
+        </motion.button>
 
-      <button
-        onClick={() => onPolicyChange("B")}
-        className={cn(
-          "policy-pill px-6 py-3 rounded-full font-medium transition-all flex items-center gap-2",
-          activePolicy === "B"
-            ? "bg-brand-amber text-black shadow-lg shadow-brand-amber/20"
-            : "bg-secondary text-muted-foreground hover:text-white"
-        )}
-      >
-        <span>Policy B</span>
-        <span
+        <motion.button
+          layoutId="activePill"
+          onClick={() => onPolicyChange("B")}
           className={cn(
-            "text-sm font-bold",
-            activePolicy === "B" ? "text-black" : getGradeColor(policyBGrade)
+            "px-6 py-3 rounded-full font-medium transition-colors duration-200 flex items-center gap-2",
+            activePolicy === "B"
+              ? "bg-background text-foreground shadow-sm"
+              : "text-muted-foreground hover:text-foreground"
           )}
         >
-          {policyBGrade}
-        </span>
-      </button>
-    </div>
+          <span>Policy B</span>
+          <span
+            className={cn(
+              "text-sm font-bold",
+              activePolicy === "B" ? "text-foreground" : getGradeColor(policyBGrade)
+            )}
+          >
+            {policyBGrade}
+          </span>
+        </motion.button>
+      </div>
+    </motion.div>
   );
 }

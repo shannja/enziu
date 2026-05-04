@@ -3,8 +3,9 @@ ENZIU Configuration Management
 All environment variables and settings for the API.
 """
 
+from __future__ import annotations
+
 from pydantic_settings import BaseSettings
-from typing import Optional
 
 
 class Settings(BaseSettings):
@@ -34,7 +35,7 @@ class Settings(BaseSettings):
     voucher_hmac_secret: str = ""
 
     # CORS
-    allowed_origins: str = "http://localhost:3000,https://enziu.ai"
+    allowed_origins: str = "http://localhost:3000,https://enziu.com"
 
     # Server
     host: str = "0.0.0.0"

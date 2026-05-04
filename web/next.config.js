@@ -3,6 +3,12 @@ const nextConfig = {
   // Enable React strict mode for better development experience
   reactStrictMode: true,
 
+  // Output standalone for Docker deployments
+  output: 'standalone',
+
+  // Remove X-Powered-By header for security
+  poweredByHeader: false,
+
   // API rewrites for development
   async rewrites() {
     return [
@@ -31,10 +37,6 @@ const nextConfig = {
             value: "max-age=63072000; includeSubDomains; preload",
           },
           {
-            key: "X-XSS-Protection",
-            value: "1; mode=block",
-          },
-          {
             key: "X-Frame-Options",
             value: "SAMEORIGIN",
           },
@@ -50,17 +52,29 @@ const nextConfig = {
             key: "Permissions-Policy",
             value: "camera=(), microphone=(), geolocation=()",
           },
+          {
+            key: "Cross-Origin-Embedder-Policy",
+            value: "require-corp",
+          },
+          {
+            key: "Cross-Origin-Opener-Policy",
+            value: "same-origin",
+          },
         ],
       },
     ];
   },
 
-  // Images configuration
+  // Images configuration - restricted patterns
   images: {
     remotePatterns: [
       {
         protocol: "https",
-        hostname: "**",
+        hostname: "enziu.com",
+      },
+      {
+        protocol: "https",
+        hostname: "*.enziu.com",
       },
     ],
   },

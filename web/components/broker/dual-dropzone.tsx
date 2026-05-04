@@ -4,12 +4,14 @@ import { useCallback, useState } from "react";
 import { useDropzone } from "react-dropzone";
 import { Upload, FileText, X, Check } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { motion } from "framer-motion";
 
 interface DualDropzoneProps {
   onFileUploaded: (file: File, policy: "A" | "B") => void;
+  onFileRemoved?: (policy: "A" | "B") => void;
 }
 
-export function BrokerDropzone({ onFileUploaded }: DualDropzoneProps) {
+export function BrokerDropzone({ onFileUploaded, onFileRemoved }: DualDropzoneProps) {
   const [policyAFile, setPolicyAFile] = useState<File | null>(null);
   const [policyBFile, setPolicyBFile] = useState<File | null>(null);
   const [isUploadingA, setIsUploadingA] = useState(false);
@@ -61,10 +63,17 @@ export function BrokerDropzone({ onFileUploaded }: DualDropzoneProps) {
     } else {
       setPolicyBFile(null);
     }
+    // Notify parent component
+    onFileRemoved?.(policy);
   };
 
   return (
-    <div className="w-full max-w-4xl mx-auto">
+    <motion.div
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.5, delay: 0.3 }}
+      className="w-full max-w-4xl mx-auto"
+    >
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {/* Policy A Dropzone */}
         <DropzoneCard
@@ -95,7 +104,7 @@ export function BrokerDropzone({ onFileUploaded }: DualDropzoneProps) {
         Zero data stored. Documents are processed in memory and permanently
         deleted when you close the tab.
       </p>
-    </div>
+    </motion.div>
   );
 }
 
@@ -121,7 +130,8 @@ function DropzoneCard({
   disabled,
 }: DropzoneCardProps) {
   return (
-    <div
+    <motion.div
+      whileHover={!disabled ? { scale: 1.01 } : undefined}
       {...getRootProps()}
       className={cn(
         "relative border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-all duration-300 min-h-[200px] flex flex-col items-center justify-center",
@@ -136,11 +146,16 @@ function DropzoneCard({
 
       {file ? (
         <div className="flex flex-col items-center gap-3">
-          <div className="w-12 h-12 rounded-full bg-brand-amber/20 flex items-center justify-center">
+          <motion.div
+            initial={{ scale: 0.8, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            transition={{ duration: 0.3 }}
+            className="w-12 h-12 rounded-full bg-brand-amber/20 flex items-center justify-center"
+          >
             <Check className="w-6 h-6 text-brand-amber" />
-          </div>
+          </motion.div>
           <div>
-            <p className="text-base font-medium text-white">{label}</p>
+            <p className="text-base font-medium">{label}</p>
             <p className="text-sm text-muted-foreground truncate max-w-[150px]">
               {file.name}
             </p>
@@ -149,12 +164,14 @@ function DropzoneCard({
             </p>
           </div>
           {!isUploading && (
-            <button
+            <motion.button
+              whileHover={{ scale: 1.1 }}
+              whileTap={{ scale: 0.9 }}
               onClick={onRemove}
               className="p-1 rounded-full hover:bg-white/10 transition-colors"
             >
               <X className="w-4 h-4 text-muted-foreground" />
-            </button>
+            </motion.button>
           )}
         </div>
       ) : isUploading ? (
@@ -166,17 +183,22 @@ function DropzoneCard({
         </div>
       ) : (
         <div className="flex flex-col items-center gap-3">
-          <div className="w-12 h-12 rounded-full bg-secondary flex items-center justify-center">
+          <motion.div
+            initial={{ scale: 0.8, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            transition={{ duration: 0.3 }}
+            className="w-12 h-12 rounded-full bg-secondary flex items-center justify-center"
+          >
             <Upload className="w-6 h-6 text-brand-amber" />
-          </div>
+          </motion.div>
           <div>
-            <p className="text-base font-medium text-white">{label}</p>
+            <p className="text-base font-medium">{label}</p>
             <p className="text-sm text-muted-foreground">
               {isDragActive ? "Drop here" : "Drop PDF or click to browse"}
             </p>
           </div>
         </div>
       )}
-    </div>
+    </motion.div>
   );
 }

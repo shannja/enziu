@@ -3,6 +3,9 @@ ENZIU API - Main Application Entry Point
 Insurance Transparency Engine
 """
 
+from __future__ import annotations
+
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, UploadFile, File, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -30,6 +33,18 @@ pdf_extractor = PDFExtractor()
 nscale_client = NScaleClient()
 voucher_service = VoucherService()
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Application lifespan manager for startup and shutdown events."""
+    # Startup
+    print(f"🚀 {settings.app_name} starting up...")
+    print(f"📍 Mode: {'development' if settings.debug else 'production'}")
+    yield
+    # Shutdown
+    print("👋 Shutting down ENZIU API...")
+
+
 # Create FastAPI application
 app = FastAPI(
     title=settings.app_name,
@@ -37,6 +52,7 @@ app = FastAPI(
     version="1.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
+    lifespan=lifespan,
 )
 
 # CORS middleware
@@ -49,11 +65,14 @@ app.add_middleware(
 )
 
 
+# ===========================================
 # Health check
+# ===========================================
+
 @app.get("/api/health")
-async def health_check():
+async def health_check() -> dict[str, str]:
     """Health check endpoint."""
-    return {"status": "healthy", "timestamp": time.time()}
+    return {"status": "healthy", "timestamp": str(time.time())}
 
 
 # ===========================================
@@ -61,7 +80,7 @@ async def health_check():
 # ===========================================
 
 @app.post("/api/upload", response_model=UploadResponse)
-async def upload_policy(file: UploadFile = File(...)):
+async def upload_policy(file: UploadFile = File(...)) -> UploadResponse:
     """
     Upload and analyze a single insurance policy PDF.
     
@@ -101,12 +120,14 @@ async def upload_policy(file: UploadFile = File(...)):
             **sneak_peek
         )
         
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Processing failed: {str(e)}")
 
 
 @app.post("/api/upload/batch", response_model=UploadResponse)
-async def upload_policy_batch(file: UploadFile = File(...)):
+async def upload_policy_batch(file: UploadFile = File(...)) -> UploadResponse:
     """
     Upload a policy for broker comparison mode.
     Upload two PDFs separately, then compare them.
@@ -144,6 +165,8 @@ async def upload_policy_batch(file: UploadFile = File(...)):
             **analysis
         )
         
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Processing failed: {str(e)}")
 
@@ -153,7 +176,7 @@ async def upload_policy_batch(file: UploadFile = File(...)):
 # ===========================================
 
 @app.post("/api/chat", response_model=ChatResponse)
-async def chat(request: ChatRequest):
+async def chat(request: ChatRequest) -> ChatResponse:
     """
     Deep Dive Q&A for a single policy.
     
@@ -178,7 +201,7 @@ async def chat(request: ChatRequest):
 
 
 @app.post("/api/compare", response_model=ChatResponse)
-async def compare(request: CompareRequest):
+async def compare(request: CompareRequest) -> ChatResponse:
     """
     Comparative Q&A for broker mode.
     Analyzes both policies together for data-backed comparisons.
@@ -205,7 +228,7 @@ async def compare(request: CompareRequest):
 # ===========================================
 
 @app.post("/api/voucher/validate", response_model=VoucherValidationResponse)
-async def validate_voucher(request: VoucherValidationRequest):
+async def validate_voucher(request: VoucherValidationRequest) -> VoucherValidationResponse:
     """
     Validate a voucher code with HMAC fast rejection.
     
@@ -235,7 +258,7 @@ async def validate_voucher(request: VoucherValidationRequest):
 
 
 @app.post("/api/voucher/recover")
-async def recover_voucher(request: VoucherRecoveryRequest):
+async def recover_voucher(request: VoucherRecoveryRequest) -> JSONResponse:
     """
     Recover a lost voucher code using passphrase.
     
@@ -253,7 +276,7 @@ async def recover_voucher(request: VoucherRecoveryRequest):
 
 
 @app.post("/api/voucher/decrement")
-async def decrement_credits(session_id: str, code: str):
+async def decrement_credits(session_id: str, code: str) -> JSONResponse:
     """
     Atomically decrement voucher credits.
     Prevents double-spending.
@@ -270,7 +293,7 @@ async def decrement_credits(session_id: str, code: str):
 # ===========================================
 
 @app.post("/api/session/end")
-async def end_session(session_id: str):
+async def end_session(session_id: str) -> JSONResponse:
     """
     End a session and wipe all data.
     
@@ -280,7 +303,7 @@ async def end_session(session_id: str):
     try:
         await nscale_client.end_session(session_id)
         return JSONResponse(content={"status": "deleted"})
-    except Exception as e:
+    except Exception:
         # Still return success even if session doesn't exist
         return JSONResponse(content={"status": "deleted"})
 
@@ -290,7 +313,7 @@ async def end_session(session_id: str):
 # ===========================================
 
 @app.post("/api/paddle/webhook")
-async def paddle_webhook():
+async def paddle_webhook() -> JSONResponse:
     """
     Handle Paddle payment webhooks.
     
@@ -298,20 +321,3 @@ async def paddle_webhook():
     """
     # TODO: Implement Paddle webhook handling
     return JSONResponse(content={"status": "received"})
-
-
-# ===========================================
-# Startup/Shutdown Events
-# ===========================================
-
-@app.on_event("startup")
-async def startup_event():
-    """Initialize services on startup."""
-    print(f"🚀 {settings.app_name} starting up...")
-    print(f"📍 Mode: {'development' if settings.debug else 'production'}")
-
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Clean up on shutdown."""
-    print("👋 Shutting down ENZIU API...")

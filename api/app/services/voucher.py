@@ -9,11 +9,14 @@ Security features:
 - Zero PII storage (no email required)
 """
 
+from __future__ import annotations
+
 import hmac
 import hashlib
 import secrets
 import re
-from typing import Dict, Any, Optional
+import time
+from typing import Any
 
 import bcrypt
 
@@ -32,7 +35,7 @@ def generate_voucher_code() -> str:
     Example: ENZ-R9T2-K8P1-XQ9W
     """
     chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"  # No I, O, 0, 1 for clarity
-    groups = []
+    groups: list[str] = []
     
     for _ in range(3):
         group = "".join(secrets.choice(chars) for _ in range(4))
@@ -149,19 +152,19 @@ class VoucherService:
     """
     
     # Voucher pack configurations
-    PACKS = {
+    PACKS: dict[str, dict[str, Any]] = {
         "PAYG": {"price": 4.99, "credits": 1, "chats": 5},
         "Starter": {"price": 50, "credits": 10, "chats": 10},
         "Pro": {"price": 100, "credits": 25, "chats": 20},
         "Office": {"price": 200, "credits": 50, "chats": 20},
     }
     
-    def __init__(self):
+    def __init__(self) -> None:
         self.hmac_secret = settings.voucher_hmac_secret
     
     async def validate(
         self, code: str, passphrase: str
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Validate a voucher code with passphrase.
         
@@ -210,7 +213,7 @@ class VoucherService:
             "pack_type": voucher_data.get("pack_type", "Unknown"),
         }
     
-    async def recover(self, passphrase: str) -> Dict[str, Any]:
+    async def recover(self, passphrase: str) -> dict[str, Any]:
         """
         Recover a voucher code using passphrase.
         
@@ -227,7 +230,7 @@ class VoucherService:
         # For now, return not found
         return {"valid": False, "error": "No voucher found for this passphrase"}
     
-    async def decrement(self, code: str) -> Dict[str, Any]:
+    async def decrement(self, code: str) -> dict[str, Any]:
         """
         Atomically decrement voucher credits.
         
@@ -249,7 +252,7 @@ class VoucherService:
         self,
         pack_type: str,
         passphrase: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Create a new voucher.
         
@@ -274,13 +277,13 @@ class VoucherService:
         passphrase_hash = hash_passphrase(passphrase)
         
         # Store in Redis (simulated)
-        voucher_data = {
+        voucher_data: dict[str, Any] = {
             "code": code,
             "passphrase_hash": passphrase_hash,
             "pack_type": pack_type,
             "credits": pack["credits"],
             "chats_per_session": pack["chats"],
-            "created_at": __import__("time").time(),
+            "created_at": time.time(),
         }
         
         await self._store_voucher_in_redis(code, voucher_data)
@@ -294,7 +297,7 @@ class VoucherService:
     
     async def _get_voucher_from_redis(
         self, code: str
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """
         Retrieve voucher data from Redis.
         
@@ -304,8 +307,8 @@ class VoucherService:
         return None
     
     async def _store_voucher_in_redis(
-        self, code: str, data: Dict[str, Any]
-    ):
+        self, code: str, data: dict[str, Any]
+    ) -> None:
         """
         Store voucher data in Redis.
         
