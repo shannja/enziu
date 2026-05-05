@@ -1,16 +1,14 @@
 "use client";
 
-import { useState } from "react";
 import { Header } from "@/components/header";
 import { Footer } from "@/components/footer";
 import { CustomerMode } from "@/components/customer/customer-mode";
 import { BrokerMode } from "@/components/broker/broker-mode";
 import { motion } from "framer-motion";
-
-type Mode = "customer" | "broker";
+import { useMode } from "@/context/ModeContext";
 
 export default function Home() {
-  const [mode, setMode] = useState<Mode>("customer");
+  const { mode, setMode } = useMode();
 
   return (
     <main className="min-h-screen bg-background">

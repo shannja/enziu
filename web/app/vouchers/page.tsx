@@ -2,40 +2,34 @@
 
 import { SimpleHeader } from "@/components/simple-header";
 import { Footer } from "@/components/footer";
-import { Ticket, Gift, ShoppingCart, Percent, Clock, HelpCircle, ArrowLeft } from "lucide-react";
 import { motion } from "framer-motion";
-import { useRouter } from "next/navigation";
+import Link from "next/link";
+import { ArrowLeft, Check } from "lucide-react";
 
-const sections = [
+const packs = [
   {
-    icon: Ticket,
-    title: "How Vouchers Work",
-    content: "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur.",
+    name: "Starter",
+    price: "$50",
+    sessions: "10 sessions",
+    chats: "10 chats per session",
+    badge: "Get started",
+    badgeVariant: "default" as const,
   },
   {
-    icon: Gift,
-    title: "Voucher Types",
-    content: "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Praesent commodo cursus magna, vel scelerisque nisl consectetur et. Vivamus magna justo, lacinia eget consectetur sed, convallis at tellus. Nulla porttitor accumsan tincidunt. Curabitur aliquet quam id dui posuere blandit. Vestibulum ac diam sit amet quam vehicula elementum sed sit amet dui.",
+    name: "Pro",
+    price: "$100",
+    sessions: "25 sessions",
+    chats: "20 chats per session",
+    badge: "Preferred",
+    badgeVariant: "preferred" as const,
   },
   {
-    icon: ShoppingCart,
-    title: "How to Redeem",
-    content: "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Donec sollicitudin molestie malesuada. Pellentesque in ipsum id orci porta dapibus. Proin eget tortor risus. Cras ultricies ligula sed magna dictum porta. Mauris blandit aliquet elit, eget tincidunt nibh pulvinar a. Sed porttitor lectus nibh.",
-  },
-  {
-    icon: Percent,
-    title: "Pricing & Discounts",
-    content: "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia Curae; Donec velit neque, auctor sit amet aliquam vel, ullamcorper sit amet ligula. Curabitur non null sit amet nisl tempus convallis quis ac lectus. Quisque velit nisi, pretium ut lacinia in, elementum id enim.",
-  },
-  {
-    icon: Clock,
-    title: "Validity & Expiry",
-    content: "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Nulla quis lorem ut libero malesuada feugiat. Curabitur arcu erat, accumsan id imperdiet et, porttitor at sem. Vivamus suscipit tortor eget felis porttitor volutpat. Pellentesque habitant morbi tristique senectus et netus et malesuada fames ac turpis egestas.",
-  },
-  {
-    icon: HelpCircle,
-    title: "FAQs",
-    content: "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed porttitor lectus nibh. Curabitur non null sit amet nisl tempus convallis quis ac lectus. Donec rutrum congue leo eget malesuada. Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia Curae; Donec velit neque, auctor sit amet aliquam vel, ullamcorper sit amet ligula.",
+    name: "Office",
+    price: "$200",
+    sessions: "50 sessions",
+    chats: "20 chats per session",
+    badge: "For firms",
+    badgeVariant: "default" as const,
   },
 ];
 
@@ -61,20 +55,18 @@ const itemVariants = {
 };
 
 function BackButton() {
-  const router = useRouter();
-  
   return (
-    <button
-      onClick={() => router.back()}
+    <Link
+      href="/"
       className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors mb-8 group"
     >
       <ArrowLeft className="w-4 h-4 group-hover:-translate-x-1 transition-transform" />
       Back
-    </button>
+    </Link>
   );
 }
 
-export default function VouchersPage() {
+export default function VoucherPacksPage() {
   return (
     <div className="min-h-screen bg-background flex flex-col">
       <SimpleHeader />
@@ -84,66 +76,89 @@ export default function VouchersPage() {
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.5 }}
-          className="max-w-4xl mx-auto"
+          className="max-w-5xl mx-auto"
         >
-          {/* Back Button */}
           <BackButton />
           
           {/* Header */}
-          <div className="text-center mb-12">
-            <div className="w-16 h-16 rounded-full bg-brand-amber/20 flex items-center justify-center mx-auto mb-6">
-              <Ticket className="w-8 h-8 text-brand-amber" />
-            </div>
+          <div className="text-center mb-16">
             <h1 className="text-3xl md:text-4xl font-bold text-foreground mb-4">
-              Vouchers
+              Voucher Packs
             </h1>
             <p className="text-muted-foreground text-lg max-w-2xl mx-auto">
-              Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.
+              Choose the pack that fits your needs. All packs include access to our full policy analysis engine.
             </p>
           </div>
 
-          {/* Content Sections */}
+          {/* Pricing Grid */}
           <motion.div
             variants={containerVariants}
             initial="hidden"
             animate="visible"
-            className="space-y-8"
+            className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-16"
           >
-            {sections.map((section, index) => (
+            {packs.map((pack, index) => (
               <motion.div
                 key={index}
                 variants={itemVariants}
-                className="bg-card border border-border rounded-lg p-6 hover:border-brand-amber/50 transition-colors duration-200"
+                className={`relative bg-card border rounded-lg p-6 flex flex-col ${
+                  pack.badgeVariant === "preferred"
+                    ? "border-brand-amber/50 shadow-lg shadow-brand-amber/10"
+                    : "border-border"
+                }`}
               >
-                <div className="flex items-start gap-4">
-                  <div className="flex-shrink-0 w-12 h-12 rounded-full bg-brand-amber/10 flex items-center justify-center">
-                    <section.icon className="w-6 h-6 text-brand-amber" />
-                  </div>
-                  <div>
-                    <h2 className="text-xl font-semibold text-foreground mb-3">
-                      {section.title}
-                    </h2>
-                    <p className="text-muted-foreground leading-relaxed">
-                      {section.content}
-                    </p>
-                  </div>
+                {/* Badge */}
+                <div className="mb-4">
+                  <span
+                    className={`inline-block px-3 py-1 text-xs font-medium rounded-full ${
+                      pack.badgeVariant === "preferred"
+                        ? "bg-brand-amber/10 text-brand-amber"
+                        : "bg-secondary text-muted-foreground"
+                    }`}
+                  >
+                    {pack.badge}
+                  </span>
                 </div>
+
+                {/* Plan name */}
+                <h2 className="text-xl font-semibold text-foreground mb-2">
+                  {pack.name}
+                </h2>
+
+                {/* Price */}
+                <div className="mb-6">
+                  <span className="text-3xl font-bold text-foreground">
+                    {pack.price}
+                  </span>
+                </div>
+
+                {/* Features */}
+                <ul className="space-y-3 mb-8 flex-1">
+                  <li className="flex items-center gap-3 text-sm text-muted-foreground">
+                    <Check className="w-4 h-4 text-brand-amber flex-shrink-0" />
+                    {pack.sessions}
+                  </li>
+                  <li className="flex items-center gap-3 text-sm text-muted-foreground">
+                    <Check className="w-4 h-4 text-brand-amber flex-shrink-0" />
+                    {pack.chats}
+                  </li>
+                </ul>
+
+                {/* CTA Button */}
+                <button
+                  className={`w-full py-3 rounded-lg font-medium transition-colors ${
+                    pack.badgeVariant === "preferred"
+                      ? "bg-brand-gradient text-black hover:bg-brand-amber/90"
+                      : "bg-secondary text-foreground hover:bg-secondary/80"
+                  }`}
+                >
+                  Get {pack.name}
+                </button>
               </motion.div>
             ))}
           </motion.div>
-
-          {/* Last Updated */}
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ delay: 0.5, duration: 0.4 }}
-            className="mt-12 text-center text-sm text-muted-foreground"
-          >
-            <p>Last updated: {new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}</p>
-          </motion.div>
         </motion.div>
       </main>
-
       <Footer />
     </div>
   );

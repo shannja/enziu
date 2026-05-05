@@ -81,14 +81,26 @@ html {
 }
 
 /* Color & Gradient Utilities */
-.border-brand-amber { border: 2px solid #ffde59; }
-.text-brand-amber { color: #ffde59; }
+.border-brand-amber { border: 2px solid #ffa550; }
+.text-brand-amber { color: #ffa550; }
 
 .bg-brand-gradient {
   background: linear-gradient(90deg, #ffde59 0%, #ff914d 75%);
 }
 
 .text-gradient {
+  background: linear-gradient(90deg, #ffde59 0%, #ff914d 75%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.link-hover-gradient {
+  color: hsl(var(--muted-foreground));
+  transition: all 0.2s;
+}
+
+.link-hover-gradient:hover {
   background: linear-gradient(90deg, #ffde59 0%, #ff914d 75%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;

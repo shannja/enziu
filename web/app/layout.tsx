@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import localFont from "next/font/local";
 import "./globals.css";
 import { ThemeProvider } from "@/context/ThemeContext";
+import { ModeProvider } from "@/context/ModeContext";
 
 const agrandir = localFont({
   src: [
@@ -45,9 +46,11 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <body className={`${agrandir.variable} ${objectSans.variable} font-body antialiased`}>
-        <ThemeProvider>
-          {children}
-        </ThemeProvider>
+        <ModeProvider>
+          <ThemeProvider>
+            {children}
+          </ThemeProvider>
+        </ModeProvider>
       </body>
     </html>
   );

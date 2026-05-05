@@ -119,7 +119,7 @@ export function BrokerMode() {
           >
             <h1 className="text-4xl md:text-5xl font-normal mb-4 font-display">
               Compare Policies{" "}
-              <span className="text-gradient font-bold">Side by Side</span>
+              <span className="text-gradient font-bold">Side by Side.</span>
             </h1>
             <p className="text-xl text-muted-foreground mb-8 max-w-2xl mx-auto">
               Upload two insurance policies and get data-backed comparisons.
@@ -128,10 +128,10 @@ export function BrokerMode() {
             <BrokerDropzone onFileUploaded={handleFileUploaded} onFileRemoved={handleFileRemoved} />
             <div className="mt-6">
               <Link
-                href="/recover"
+                href="/vouchers"
                 className="relative text-sm text-gradient font-medium transition-all duration-200 group"
               >
-                Forgot voucher code?
+                Comparing a lot of policies?
                 <span className="absolute left-0 bottom-0 w-full h-[1px] bg-brand-gradient transition-transform duration-200 origin-left scale-x-0 group-hover:scale-x-100" />
               </Link>
             </div>
