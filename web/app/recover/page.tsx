@@ -1,10 +1,26 @@
 "use client";
 
 import { useState } from "react";
+import { SimpleHeader } from "@/components/simple-header";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Key, AlertCircle, CheckCircle, ArrowLeft } from "lucide-react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+
+function BackButton() {
+  const router = useRouter();
+  
+  return (
+    <button
+      onClick={() => router.back()}
+      className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors mb-6 group"
+    >
+      <ArrowLeft className="w-4 h-4 group-hover:-translate-x-1 transition-transform" />
+      Back
+    </button>
+  );
+}
 
 export default function RecoverPage() {
   const [passphrase, setPassphrase] = useState("");
@@ -46,17 +62,11 @@ export default function RecoverPage() {
   };
 
   return (
-    <main className="min-h-screen bg-black">
-      <div className="container mx-auto px-4 py-16">
-        <Link
-          href="/"
-          className="inline-flex items-center gap-2 text-muted-foreground hover:text-white mb-8"
-        >
-          <ArrowLeft className="w-4 h-4" />
-          Back to ENZIU
-        </Link>
-
+    <div className="min-h-screen bg-background flex flex-col">
+      <SimpleHeader />
+      <main className="flex-1 container mx-auto px-4 py-12">
         <div className="max-w-md mx-auto">
+          <BackButton />
           <Card className="border-border">
             <CardHeader className="text-center">
               <div className="w-12 h-12 rounded-full bg-brand-amber/20 flex items-center justify-center mx-auto mb-4">
@@ -145,7 +155,7 @@ export default function RecoverPage() {
             </CardContent>
           </Card>
         </div>
-      </div>
-    </main>
+      </main>
+    </div>
   );
 }

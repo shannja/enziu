@@ -128,12 +128,12 @@ export function BrokerMode() {
             <BrokerDropzone onFileUploaded={handleFileUploaded} onFileRemoved={handleFileRemoved} />
             <div className="mt-6">
               <Link
-                href="/recover-voucher"
+                href="/recover"
                 className="relative text-sm text-gradient font-medium transition-all duration-200 group"
               >
                 Forgot voucher code?
                 <span className="absolute left-0 bottom-0 w-full h-[1px] bg-brand-gradient transition-transform duration-200 origin-left scale-x-0 group-hover:scale-x-100" />
-                </Link>
+              </Link>
             </div>
           </motion.div>
         )}

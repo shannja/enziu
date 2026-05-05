@@ -1,4 +1,3 @@
-/* stylelint-disable at-rule-no-unknown */
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -58,69 +57,38 @@
     @apply bg-background text-foreground;
     font-feature-settings: "rlig" 1, "calt" 1;
   }
-  
-  h1, h2, h3, h4, h5, h6 {
-    @apply font-display font-semibold tracking-tight;
-  }
 }
 
-/* Minimalist Design Utilities */
 @layer components {
+  /* Utility for that soft "raised" surface look */
+  .neumorphic {
+    @apply bg-background border border-white/5;
+    box-shadow: 6px 6px 12px rgba(0, 0, 0, 0.05), -6px -6px 12px rgba(255, 255, 255, 0.8);
+  }
+  
+  .dark .neumorphic {
+    box-shadow: 4px 4px 10px rgba(0, 0, 0, 0.4), -2px -2px 10px rgba(255, 255, 255, 0.05);
+  }
+
   .btn-primary {
     @apply bg-brand-amber text-brand-black px-6 py-3 rounded-lg font-medium 
            hover:bg-brand-amber/90 transition-colors duration-200;
   }
-  
-  .btn-secondary {
-    @apply bg-secondary text-secondary-foreground px-6 py-3 rounded-lg font-medium 
-           hover:bg-secondary/80 transition-colors duration-200;
-  }
-  
-  .card {
-    @apply bg-card border border-border rounded-lg p-6 
-           hover:border-brand-amber/50 transition-colors duration-200;
-  }
-  
-  .dropzone {
-    @apply border-2 border-dashed border-border rounded-lg p-12 text-center 
-           hover:border-brand-amber transition-colors duration-200 
-           cursor-pointer;
-  }
-  
-  .dropzone-active {
-    @apply border-brand-amber bg-brand-amber/5;
-  }
 }
 
-/* Smooth scrolling */
 html {
   scroll-behavior: smooth;
 }
 
-/* Focus styles */
-:focus-visible {
-  @apply outline-none ring-2 ring-brand-amber ring-offset-2 ring-offset-background;
-}
+/* Color & Gradient Utilities */
+.border-brand-amber { border: 2px solid #ffde59; }
+.text-brand-amber { color: #ffde59; }
 
-/* Gradient Text Utilities */
-.text-gradient {
-  background: linear-gradient(90deg, #ffde59 0%, #ff914d 75%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-}
-
-.text-gradient-subtle {
-  @apply bg-gradient-to-l from-foreground via-foreground/90 to-foreground/80 bg-clip-text text-transparent;
-}
-
-/* Brand Gradient - Linear Gradient at 90 degrees */
 .bg-brand-gradient {
   background: linear-gradient(90deg, #ffde59 0%, #ff914d 75%);
 }
 
-/* Brand Gradient Text (redundant with .text-gradient but kept for consistency) */
-.text-brand-gradient {
+.text-gradient {
   background: linear-gradient(90deg, #ffde59 0%, #ff914d 75%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;

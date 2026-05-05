@@ -30,7 +30,7 @@ export function Header({ mode, onModeChange }: HeaderProps) {
       initial={{ y: -20, opacity: 0 }}
       animate={{ y: 0, opacity: 1 }}
       transition={{ duration: 0.4, ease: "easeOut" }}
-      className="sticky top-0 z-50 w-full border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60"
+      className="sticky top-0 z-50 w-full border-b border-border bg-background backdrop-blur supports-[backdrop-filter]:bg-background/80"
     >
       <div className="container mx-auto px-4 py-3 md:py-0 md:h-16 flex flex-col items-center gap-4 md:grid md:grid-cols-3 md:gap-0">
         
