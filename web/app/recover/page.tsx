@@ -72,7 +72,7 @@ export default function RecoverPage() {
               <div className="w-12 h-12 rounded-full bg-brand-amber/0 flex items-center justify-center mx-auto mb-4">
                 <Key className="w-6 h-6 text-brand-amber" />
               </div>
-              <CardTitle className="text-xl text-white">
+              <CardTitle className="text-xl font-normal">
                 Recover Your Voucher
               </CardTitle>
               <CardDescription>
@@ -119,7 +119,7 @@ export default function RecoverPage() {
                       value={passphrase}
                       onChange={(e) => setPassphrase(e.target.value)}
                       placeholder="Enter your passphrase"
-                      className="w-full bg-secondary border border-border rounded-lg px-4 py-2 text-white placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-brand-amber"
+                      className="w-full bg-secondary border border-border rounded-lg px-4 py-2 font-normal placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-brand-amber"
                     />
                   </div>
 

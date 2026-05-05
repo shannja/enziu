@@ -1,6 +1,7 @@
 "use client";
 
 import Image from "next/image";
+import Link from "next/link";
 import { Moon, Sun } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
 import { motion } from "framer-motion";
@@ -41,14 +42,16 @@ export function Header({ mode, onModeChange }: HeaderProps) {
           transition={{ duration: 0.4, delay: 0.1, ease: "easeOut" }}
           className="flex justify-center md:justify-start"
         >
-          <Image
-            src={actualTheme === "dark" ? "/logos/logo-dark.png" : "/logos/logo-light.png"}
-            alt="Enziu"
-            width={110}
-            height={28}
-            className="h-7 md:h-8 w-auto"
-            priority
-          />
+          <Link href="/" className="flex items-center gap-2 group">
+            <Image
+              src={actualTheme === "dark" ? "/logos/logo-dark.png" : "/logos/logo-light.png"}
+              alt="Enziu"
+              width={120}
+              height={32}
+              className="h-8 w-auto"
+              priority
+            />
+          </Link>
         </motion.div>
 
         {/* Mode Toggle - Bottom on Mobile, Center on Desktop */}
