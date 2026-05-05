@@ -14,7 +14,7 @@ const agrandir = localFont({
     {
       path: "../public/fonts/agrandir/Agrandir-TextBold.otf",
       weight: "700",
-      style: "normal",
+      style: "bold",
     },
   ],
   variable: "--font-display",

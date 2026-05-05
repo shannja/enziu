@@ -31,7 +31,7 @@ export function PolicyPillToggle({
           className={cn(
             "px-6 py-3 rounded-full font-medium transition-colors duration-200 flex items-center gap-2",
             activePolicy === "A"
-              ? "bg-background text-foreground shadow-sm"
+              ? "bg-gradient-to-r from-[#ffde59] to-[#ff914d] text-black shadow-sm font-semibold"
               : "text-muted-foreground hover:text-foreground"
           )}
         >
@@ -52,7 +52,7 @@ export function PolicyPillToggle({
           className={cn(
             "px-6 py-3 rounded-full font-medium transition-colors duration-200 flex items-center gap-2",
             activePolicy === "B"
-              ? "bg-background text-foreground shadow-sm"
+              ? "bg-gradient-to-r from-[#ffde59] to-[#ff914d] text-black shadow-sm font-semibold"
               : "text-muted-foreground hover:text-foreground"
           )}
         >

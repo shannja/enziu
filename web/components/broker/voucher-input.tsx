@@ -53,9 +53,9 @@ export function VoucherInput({ onValidated }: VoucherInputProps) {
 
   if (success) {
     return (
-      <Card className="border-brand-amber/30 bg-brand-amber/5">
+      <Card className="border-[#ffb753]/30 bg-[rgba(255,183,83,0.05)]">
         <CardContent className="flex items-center gap-3 py-6">
-          <CheckCircle className="w-6 h-6 text-brand-amber" />
+          <CheckCircle className="w-6 h-6" style={{ stroke: 'url(#icon-gradient)' }} />
           <div>
             <p className="font-medium text-white">Voucher Applied!</p>
             <p className="text-sm text-muted-foreground">
@@ -71,7 +71,7 @@ export function VoucherInput({ onValidated }: VoucherInputProps) {
     <Card className="border-border">
       <CardHeader>
         <CardTitle className="text-lg text-white flex items-center gap-2">
-          <Key className="w-5 h-5 text-brand-amber" />
+          <Key className="w-5 h-5" style={{ stroke: 'url(#icon-gradient)' }} />
           Have a Voucher Code?
         </CardTitle>
       </CardHeader>
@@ -86,7 +86,7 @@ export function VoucherInput({ onValidated }: VoucherInputProps) {
               value={code}
               onChange={(e) => setCode(e.target.value)}
               placeholder="ENZ-R9T2-K8P1-XQ9W"
-              className="w-full bg-secondary border border-border rounded-lg px-4 py-2 text-white placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-brand-amber uppercase tracking-wider"
+              className="w-full bg-secondary border border-border rounded-lg px-4 py-2 text-white placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-[#ffb753] uppercase tracking-wider"
             />
           </div>
 
@@ -99,7 +99,7 @@ export function VoucherInput({ onValidated }: VoucherInputProps) {
               value={passphrase}
               onChange={(e) => setPassphrase(e.target.value)}
               placeholder="Enter your passphrase"
-              className="w-full bg-secondary border border-border rounded-lg px-4 py-2 text-white placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-brand-amber"
+              className="w-full bg-secondary border border-border rounded-lg px-4 py-2 text-white placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-[#ffb753]"
             />
           </div>
 
@@ -113,7 +113,7 @@ export function VoucherInput({ onValidated }: VoucherInputProps) {
           <Button
             type="submit"
             disabled={isLoading || !code.trim() || !passphrase.trim()}
-            variant="outline"
+            variant="gradient-bg"
             className="w-full"
           >
             {isLoading ? (
@@ -127,12 +127,12 @@ export function VoucherInput({ onValidated }: VoucherInputProps) {
           </Button>
         </form>
 
-        <p className="text-xs text-center text-muted-foreground mt-4">
-          Lost your code?{" "}
-          <a href="/recover" className="text-brand-amber hover:underline">
-            Recover with passphrase
-          </a>
-        </p>
+          <p className="text-xs text-center text-muted-foreground mt-4">
+            Lost your code?{" "}
+            <a href="/recover" className="text-gradient hover:underline">
+              Recover with passphrase
+            </a>
+          </p>
       </CardContent>
     </Card>
   );

@@ -110,7 +110,7 @@ export function SneakPeekBento({ result }: SneakPeekBentoProps) {
           <Card className="bento-card bg-card/50 border-border h-full">
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-                <Shield className="w-4 h-4 text-brand-amber" />
+                <Shield className="w-4 h-4" style={{ stroke: 'url(#icon-gradient)' }} />
                 Red Flags
               </CardTitle>
             </CardHeader>
@@ -135,7 +135,7 @@ export function SneakPeekBento({ result }: SneakPeekBentoProps) {
           <Card className="bento-card bg-card/50 border-border h-full">
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-                <FileText className="w-4 h-4 text-brand-amber" />
+                <FileText className="w-4 h-4" style={{ stroke: 'url(#icon-gradient)' }} />
                 Summary
               </CardTitle>
             </CardHeader>

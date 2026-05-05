@@ -45,8 +45,8 @@ export function VerdictBar({ policyA, policyB }: VerdictBarProps) {
               <span className="text-sm">Both policies scored the same</span>
             </div>
           ) : (
-            <div className="flex items-center justify-center gap-2 text-brand-amber">
-              <Trophy className="w-5 h-5" />
+            <div className="flex items-center justify-center gap-2">
+              <Trophy className="w-5 h-5" style={{ stroke: 'url(#icon-gradient)' }} />
               <span className="font-medium">
                 Policy {winner === "A" ? "A" : "B"} Wins
               </span>

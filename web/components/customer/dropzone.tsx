@@ -50,9 +50,9 @@ export function CustomerDropzone({ onFileUploaded }: CustomerDropzoneProps) {
         className={cn(
           "relative border-2 border-dashed rounded-2xl p-12 text-center cursor-pointer transition-all duration-300",
           isDragActive
-            ? "border-brand-amber bg-brand-amber/10 dropzone-active"
-            : "border-border hover:border-brand-amber/50 hover:bg-white/5",
-          selectedFile && "border-brand-amber bg-brand-amber/5"
+            ? "border-[#ffde59] bg-gradient-to-br from-[rgba(255,222,89,0.1)] to-[rgba(255,145,77,0.1)] dropzone-active"
+            : "border-border hover:border-[#ffb753] hover:bg-white/5",
+          selectedFile && "border-[#ffb753] bg-[rgba(255,183,83,0.05)]"
         )}
       >
         <input {...getInputProps()} />

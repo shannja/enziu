@@ -121,7 +121,7 @@ export function PaddleCheckout({
         <Button
           onClick={handleCheckout}
           disabled={!isPaddleLoaded || isProcessing}
-          variant="amber"
+          variant="gradient-bg"
           size="lg"
           className="w-full"
         >

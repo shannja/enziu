@@ -69,7 +69,7 @@ export default function RecoverPage() {
           <BackButton />
           <Card className="border-border">
             <CardHeader className="text-center">
-              <div className="w-12 h-12 rounded-full bg-brand-amber/20 flex items-center justify-center mx-auto mb-4">
+              <div className="w-12 h-12 rounded-full bg-brand-amber/0 flex items-center justify-center mx-auto mb-4">
                 <Key className="w-6 h-6 text-brand-amber" />
               </div>
               <CardTitle className="text-xl text-white">

@@ -119,7 +119,7 @@ export function BrokerMode() {
           >
             <h1 className="text-4xl md:text-5xl font-normal mb-4 font-display">
               Compare Policies{" "}
-              <span className="text-gradient font-bold">Side by Side.</span>
+              <span className="bg-gradient-to-r from-[#ffde59] to-[#ff914d] bg-clip-text text-transparent">Side by Side.</span>
             </h1>
             <p className="text-xl text-muted-foreground mb-8 max-w-2xl mx-auto">
               Upload two insurance policies and get data-backed comparisons.
@@ -129,10 +129,9 @@ export function BrokerMode() {
             <div className="mt-6">
               <Link
                 href="/vouchers"
-                className="relative text-sm text-gradient font-medium transition-all duration-200 group"
+                className="btn-gradient-text text-sm font-bold"
               >
                 Comparing a lot of policies?
-                <span className="absolute left-0 bottom-0 w-full h-[1px] bg-brand-gradient transition-transform duration-200 origin-left scale-x-0 group-hover:scale-x-100" />
               </Link>
             </div>
           </motion.div>
@@ -145,7 +144,7 @@ export function BrokerMode() {
             className="text-center py-16"
           >
             <div className="inline-flex flex-col items-center gap-4">
-              <div className="w-16 h-16 border-4 border-brand-amber border-t-transparent rounded-full animate-spin" />
+              <div className="w-16 h-16 border-4 border-[#ffb753] border-t-transparent rounded-full animate-spin" />
               <p className="text-lg text-muted-foreground">
                 Streaming policies to secure memory...
               </p>
@@ -165,7 +164,7 @@ export function BrokerMode() {
                   <h3 className="font-medium mb-2">Policy A</h3>
                   <p className="text-sm text-muted-foreground">
                     Grade:{" "}
-                    <span className="text-brand-amber font-bold">{policyA.grade.overall}</span>
+                    <span className="bg-gradient-to-r from-[#ffde59] to-[#ff914d] bg-clip-text text-transparent font-bold">{policyA.grade.overall}</span>
                   </p>
                 </div>
               )}
@@ -174,7 +173,7 @@ export function BrokerMode() {
                   <h3 className="font-medium mb-2">Policy B</h3>
                   <p className="text-sm text-muted-foreground">
                     Grade:{" "}
-                    <span className="text-brand-amber font-bold">{policyB.grade.overall}</span>
+                    <span className="bg-gradient-to-r from-[#ffde59] to-[#ff914d] bg-clip-text text-transparent font-bold">{policyB.grade.overall}</span>
                   </p>
                 </div>
               )}
@@ -189,12 +188,12 @@ export function BrokerMode() {
                 </>
               ) : (
                 <div className="text-center">
-                  <p className="text-brand-amber mb-4">✓ Voucher applied!</p>
+                  <p className="text-gradient mb-4">✓ Voucher applied!</p>
                   <motion.button
                     whileHover={{ scale: 1.02 }}
                     whileTap={{ scale: 0.98 }}
                     onClick={() => setStep("split-view")}
-                    className="bg-brand-amber text-black px-6 py-3 rounded-lg font-medium hover:bg-brand-amber/90 transition-colors"
+                    className="btn-gradient-bg"
                   >
                     Start Comparison
                   </motion.button>

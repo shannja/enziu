@@ -65,7 +65,7 @@ export function Header({ mode, onModeChange }: HeaderProps) {
               className={cn(
                 "px-6 py-1.5 md:px-5 md:py-2 text-xs md:text-sm font-medium rounded-full transition-all duration-200",
                 mode === m.value
-                  ? "bg-background text-foreground shadow-sm"
+                  ? "bg-gradient-to-r from-[#ffde59] to-[#ff914d] text-black shadow-sm"
                   : "text-muted-foreground hover:text-foreground"
               )}
             >

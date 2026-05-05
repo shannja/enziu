@@ -33,10 +33,9 @@ export function Footer() {
             {/* Need Help: Gradient text by default, Underline on hover */}
             <Link
               href="/recover"
-              className="relative text-sm text-gradient font-medium transition-all duration-200 group"
+              className="btn-gradient-text text-sm font-bold"
             >
               Forgot Voucher Code?
-              <span className="absolute left-0 -bottom-1 w-full h-[1px] bg-brand-gradient transition-transform duration-200 origin-left scale-x-0 group-hover:scale-x-100" />
             </Link>
           </div>
         )}

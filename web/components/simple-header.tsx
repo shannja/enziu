@@ -27,7 +27,7 @@ export function SimpleHeader() {
           animate={{ x: 0, opacity: 1 }}
           transition={{ duration: 0.4, ease: "easeOut" }}
         >
-          <Link href="/" className="flex items-center gap-2 hover:opacity-80 transition-opacity">
+          <Link href="/" className="flex items-center gap-2 group">
             <Image
               src={actualTheme === "dark" ? "/logos/logo-dark.png" : "/logos/logo-light.png"}
               alt="Enziu"

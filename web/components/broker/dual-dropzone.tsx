@@ -159,9 +159,9 @@ function DropzoneCard({
       className={cn(
         "relative border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-all duration-300 min-h-[200px] flex flex-col items-center justify-center",
         isDragActive
-          ? "border-brand-amber bg-brand-amber/10"
-          : "border-border hover:border-brand-amber/50 hover:bg-white/5",
-        file && "border-brand-amber bg-brand-amber/5 border-dashed-0",
+          ? "border-[#ffde59] bg-gradient-to-br from-[rgba(255,222,89,0.1)] to-[rgba(255,145,77,0.1)]"
+          : "border-border hover:border-[#ffb753] hover:bg-white/5",
+        file && "border-[#ffb753] bg-[rgba(255,183,83,0.05)]",
         disabled && "cursor-default opacity-70"
       )}
     >
@@ -199,7 +199,7 @@ function DropzoneCard({
       ) : isUploading ? (
         <div className="flex flex-col items-center gap-3">
           <div className="w-8 h-8 flex items-center justify-center">
-            <div className="w-6 h-6 border-2 border-brand-amber border-t-transparent rounded-full animate-spin" />
+            <div className="w-6 h-6 border-2 border-[#ffb753] border-t-transparent rounded-full animate-spin" />
           </div>
           <p className="text-sm text-muted-foreground">Uploading...</p>
         </div>

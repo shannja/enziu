@@ -21,7 +21,7 @@ export function ThemeToggle({ className }: { className?: string }) {
     <div className={cn("relative", className)}>
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className="flex items-center justify-center w-10 h-10 rounded-lg border border-border bg-background/50 backdrop-blur-sm hover:bg-accent/50 transition-all duration-200"
+        className="flex items-center justify-center w-10 h-10 rounded-lg border border-border bg-background/50 backdrop-blur-sm hover:border-[#ffb753] hover:shadow-[0_0_12px_rgba(255,183,83,0.3)] transition-all duration-200"
         aria-label="Toggle theme"
       >
         {currentTheme.icon}
@@ -42,9 +42,9 @@ export function ThemeToggle({ className }: { className?: string }) {
                   setIsOpen(false);
                 }}
                 className={cn(
-                  "flex items-center gap-2 w-full px-3 py-2 text-sm rounded-md transition-colors",
+                  "flex items-center gap-2 w-full px-3 py-2 text-sm rounded-md transition-all duration-200",
                   theme === t.value
-                    ? "bg-accent text-accent-foreground"
+                    ? "bg-gradient-to-r from-[#ffde59] to-[#ff914d] text-black font-semibold"
                     : "hover:bg-accent/50 text-muted-foreground hover:text-foreground"
                 )}
               >
