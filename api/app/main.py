@@ -98,7 +98,7 @@ async def health_check(request: Request) -> dict[str, str]:
 # PDF Upload Endpoints (Memory-Safe)
 # ===========================================
 
-@app.post("/api/upload")
+@app.post("/api/upload", response_model=None)
 @limiter.limit(RATE_LIMITS["upload"])
 async def upload_policy(request: Request, file: UploadFile = File(...)):
     """
@@ -146,7 +146,7 @@ async def upload_policy(request: Request, file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=f"Processing failed: {str(e)}")
 
 
-@app.post("/api/upload/batch")
+@app.post("/api/upload/batch", response_model=None)
 @limiter.limit(RATE_LIMITS["upload"])
 async def upload_policy_batch(request: Request, file: UploadFile = File(...)):
     """

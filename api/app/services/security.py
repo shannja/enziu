@@ -51,6 +51,7 @@ RATE_LIMITS = {
     "chat": f"{settings.rate_limit_chat}/minute",      # AI inference
     "voucher": f"{settings.rate_limit_voucher}/minute", # Financial operations
     "health": f"{settings.rate_limit_health}/minute",   # Health checks
+    "general": f"{settings.rate_limit_general}/minute"
 }
 
 
