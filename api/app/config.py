@@ -41,6 +41,26 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8000
 
+    # ===========================================
+    # Security Settings
+    # ===========================================
+    
+    # Rate Limiting (requests per minute)
+    rate_limit_upload: int = 10       # Expensive AI processing
+    rate_limit_chat: int = 30         # AI inference
+    rate_limit_voucher: int = 20      # Financial operations
+    rate_limit_health: int = 100      # Health checks
+    rate_limit_general: int = 100     # General API endpoints
+    
+    # API Security
+    api_secret_key: str = ""          # For JWT/authentication (generate with: openssl rand -hex 32)
+    
+    # File Upload Limits
+    max_upload_size_mb: int = 10      # Maximum file size in MB
+    
+    # Request Timeout (seconds)
+    request_timeout: int = 60         # Maximum request processing time
+
     class Config:
         env_file = ".env"
         case_sensitive = False

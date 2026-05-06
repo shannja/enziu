@@ -18,6 +18,16 @@ from .config import settings
 from .services.pdf_extractor import PDFExtractor
 from .services.inference import NScaleClient
 from .services.voucher import VoucherService
+from .services.security import (
+    SecurityHeadersMiddleware,
+    InputValidationMiddleware,
+    APIKeyMiddleware,
+    limiter,
+    SecurityEventLogger,
+    RATE_LIMITS,
+)
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 from .models.schemas import (
     UploadResponse,
     ChatRequest,
@@ -64,13 +74,24 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Security middleware (add in order: headers -> input validation -> auth)
+app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(InputValidationMiddleware)
+app.add_middleware(APIKeyMiddleware)
+
+# Rate limiting middleware
+app.add_middleware(SlowAPIMiddleware)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
 
 # ===========================================
 # Health check
 # ===========================================
 
 @app.get("/api/health")
-async def health_check() -> dict[str, str]:
+@limiter.limit(RATE_LIMITS["health"])
+async def health_check(request) -> dict[str, str]:
     """Health check endpoint."""
     return {"status": "healthy", "timestamp": str(time.time())}
 
@@ -80,7 +101,8 @@ async def health_check() -> dict[str, str]:
 # ===========================================
 
 @app.post("/api/upload", response_model=UploadResponse)
-async def upload_policy(file: UploadFile = File(...)) -> UploadResponse:
+@limiter.limit(RATE_LIMITS["upload"])
+async def upload_policy(request, file: UploadFile = File(...)) -> UploadResponse:
     """
     Upload and analyze a single insurance policy PDF.
     
@@ -127,7 +149,8 @@ async def upload_policy(file: UploadFile = File(...)) -> UploadResponse:
 
 
 @app.post("/api/upload/batch", response_model=UploadResponse)
-async def upload_policy_batch(file: UploadFile = File(...)) -> UploadResponse:
+@limiter.limit(RATE_LIMITS["upload"])
+async def upload_policy_batch(request, file: UploadFile = File(...)) -> UploadResponse:
     """
     Upload a policy for broker comparison mode.
     Upload two PDFs separately, then compare them.
@@ -176,6 +199,7 @@ async def upload_policy_batch(file: UploadFile = File(...)) -> UploadResponse:
 # ===========================================
 
 @app.post("/api/chat", response_model=ChatResponse)
+@limiter.limit(RATE_LIMITS["chat"])
 async def chat(request: ChatRequest) -> ChatResponse:
     """
     Deep Dive Q&A for a single policy.
@@ -201,6 +225,7 @@ async def chat(request: ChatRequest) -> ChatResponse:
 
 
 @app.post("/api/compare", response_model=ChatResponse)
+@limiter.limit(RATE_LIMITS["chat"])
 async def compare(request: CompareRequest) -> ChatResponse:
     """
     Comparative Q&A for broker mode.
@@ -228,6 +253,7 @@ async def compare(request: CompareRequest) -> ChatResponse:
 # ===========================================
 
 @app.post("/api/voucher/validate", response_model=VoucherValidationResponse)
+@limiter.limit(RATE_LIMITS["voucher"])
 async def validate_voucher(request: VoucherValidationRequest) -> VoucherValidationResponse:
     """
     Validate a voucher code with HMAC fast rejection.
@@ -258,6 +284,7 @@ async def validate_voucher(request: VoucherValidationRequest) -> VoucherValidati
 
 
 @app.post("/api/voucher/recover")
+@limiter.limit(RATE_LIMITS["voucher"])
 async def recover_voucher(request: VoucherRecoveryRequest) -> JSONResponse:
     """
     Recover a lost voucher code using passphrase.
@@ -276,7 +303,8 @@ async def recover_voucher(request: VoucherRecoveryRequest) -> JSONResponse:
 
 
 @app.post("/api/voucher/decrement")
-async def decrement_credits(session_id: str, code: str) -> JSONResponse:
+@limiter.limit(RATE_LIMITS["voucher"])
+async def decrement_credits(request, session_id: str, code: str) -> JSONResponse:
     """
     Atomically decrement voucher credits.
     Prevents double-spending.
@@ -293,7 +321,8 @@ async def decrement_credits(session_id: str, code: str) -> JSONResponse:
 # ===========================================
 
 @app.post("/api/session/end")
-async def end_session(session_id: str) -> JSONResponse:
+@limiter.limit(RATE_LIMITS["general"])
+async def end_session(request, session_id: str) -> JSONResponse:
     """
     End a session and wipe all data.
     
@@ -313,7 +342,8 @@ async def end_session(session_id: str) -> JSONResponse:
 # ===========================================
 
 @app.post("/api/paddle/webhook")
-async def paddle_webhook() -> JSONResponse:
+@limiter.limit(RATE_LIMITS["general"])
+async def paddle_webhook(request) -> JSONResponse:
     """
     Handle Paddle payment webhooks.
     
