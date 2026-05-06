@@ -18,8 +18,8 @@ class Settings(BaseSettings):
 
     # NScale Inference (Llama 3.3 70B Instruct)
     nscale_api_key: str = ""
-    nscale_api_base: str = "https://api.nscale.com/v1"
-    nscale_model: str = "llama-3.3-70b-instruct"
+    nscale_api_base: str = "https://inference.api.nscale.com/v1"
+    nscale_model: str = "meta-llama-3.3-70b-instruct"
 
     # Upstash Redis
     upstash_redis_rest_url: str = ""
@@ -35,7 +35,7 @@ class Settings(BaseSettings):
     voucher_hmac_secret: str = ""
 
     # CORS
-    allowed_origins: str = "http://localhost:3000,https://enziu.com"
+    allowed_origins: str = "http://localhost:3000,https://enziu.vercel.app"
 
     # Server
     host: str = "0.0.0.0"

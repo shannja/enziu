@@ -87,8 +87,8 @@ app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 # Health check
 # ===========================================
 
-@app.get("/api/health")
 @limiter.limit(RATE_LIMITS["health"])
+@app.get("/api/health")
 async def health_check(request: Request) -> dict[str, str]:
     """Health check endpoint."""
     return {"status": "healthy", "timestamp": str(time.time())}
@@ -98,8 +98,8 @@ async def health_check(request: Request) -> dict[str, str]:
 # PDF Upload Endpoints (Memory-Safe)
 # ===========================================
 
-@app.post("/api/upload", response_model=None)
 @limiter.limit(RATE_LIMITS["upload"])
+@app.post("/api/upload", response_model=None)
 async def upload_policy(request: Request, file: UploadFile = File(...)):
     """
     Upload and analyze a single insurance policy PDF.
@@ -146,8 +146,8 @@ async def upload_policy(request: Request, file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=f"Processing failed: {str(e)}")
 
 
-@app.post("/api/upload/batch", response_model=None)
 @limiter.limit(RATE_LIMITS["upload"])
+@app.post("/api/upload/batch", response_model=None)
 async def upload_policy_batch(request: Request, file: UploadFile = File(...)):
     """
     Upload a policy for broker comparison mode.
@@ -196,8 +196,8 @@ async def upload_policy_batch(request: Request, file: UploadFile = File(...)):
 # Chat / Deep Dive Endpoints
 # ===========================================
 
-@app.post("/api/chat", response_model=ChatResponse)
 @limiter.limit(RATE_LIMITS["chat"])
+@app.post("/api/chat", response_model=ChatResponse)
 async def chat(request: Request, body: ChatRequest) -> ChatResponse:
     """
     Deep Dive Q&A for a single policy.
@@ -222,8 +222,8 @@ async def chat(request: Request, body: ChatRequest) -> ChatResponse:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/compare", response_model=ChatResponse)
 @limiter.limit(RATE_LIMITS["chat"])
+@app.post("/api/compare", response_model=ChatResponse)
 async def compare(request: Request, body: CompareRequest) -> ChatResponse:
     """
     Comparative Q&A for broker mode.
@@ -250,8 +250,8 @@ async def compare(request: Request, body: CompareRequest) -> ChatResponse:
 # Voucher Endpoints
 # ===========================================
 
-@app.post("/api/voucher/validate", response_model=VoucherValidationResponse)
 @limiter.limit(RATE_LIMITS["voucher"])
+@app.post("/api/voucher/validate", response_model=VoucherValidationResponse)
 async def validate_voucher(
     request: Request,
     body: VoucherValidationRequest
@@ -284,8 +284,8 @@ async def validate_voucher(
         )
 
 
-@app.post("/api/voucher/recover")
 @limiter.limit(RATE_LIMITS["voucher"])
+@app.post("/api/voucher/recover")
 async def recover_voucher(
     request: Request,
     body: VoucherRecoveryRequest
@@ -306,8 +306,8 @@ async def recover_voucher(
         raise HTTPException(status_code=404, detail=str(e))
 
 
-@app.post("/api/voucher/decrement")
 @limiter.limit(RATE_LIMITS["voucher"])
+@app.post("/api/voucher/decrement")
 async def decrement_credits(
     request: Request,
     session_id: str,
@@ -328,8 +328,8 @@ async def decrement_credits(
 # Session Management
 # ===========================================
 
-@app.post("/api/session/end")
 @limiter.limit(RATE_LIMITS["general"])
+@app.post("/api/session/end")
 async def end_session(request: Request, session_id: str) -> JSONResponse:
     """
     End a session and wipe all data.
@@ -349,8 +349,8 @@ async def end_session(request: Request, session_id: str) -> JSONResponse:
 # Paddle Webhooks
 # ===========================================
 
-@app.post("/api/paddle/webhook")
 @limiter.limit(RATE_LIMITS["general"])
+@app.post("/api/paddle/webhook")
 async def paddle_webhook(request: Request) -> JSONResponse:
     """
     Handle Paddle payment webhooks.
