@@ -25,6 +25,7 @@ from .services.security import (
     limiter,
     SecurityEventLogger,
     RATE_LIMITS,
+    rate_limit_exceeded_handler,
 )
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
@@ -82,7 +83,7 @@ app.add_middleware(APIKeyMiddleware)
 # Rate limiting middleware
 app.add_middleware(SlowAPIMiddleware)
 app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 
 
 # ===========================================

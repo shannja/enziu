@@ -276,3 +276,27 @@ class SecurityEventLogger:
         logger.info(
             f"File uploaded: filename={filename}, size={size}, ip={ip}, time={time.time()}"
         )
+
+
+# ===========================================
+# Rate Limit Exceeded Handler
+# ===========================================
+
+def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded) -> JSONResponse:
+    """Custom handler for rate limit exceeded exceptions."""
+    # Log the rate limit violation
+    SecurityEventLogger.log_rate_limit_exceeded(
+        endpoint=str(request.url.path),
+        ip=request.client.host if request.client else "unknown"
+    )
+    
+    return JSONResponse(
+        status_code=429,
+        content={
+            "detail": "Rate limit exceeded. Please try again later.",
+            "error": "too_many_requests"
+        },
+        headers={
+            "Retry-After": str(exc.detail.retry_after) if hasattr(exc.detail, 'retry_after') else "60"
+        }
+    )
