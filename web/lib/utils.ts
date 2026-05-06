@@ -58,3 +58,80 @@ export function debounce<T extends (...args: unknown[]) => void>(
     timeout = setTimeout(() => func(...args), wait);
   };
 }
+
+/**
+ * Generate a random passphrase for voucher recovery.
+ * Format: 4 random words separated by hyphens (e.g., "Blue9Kite-Run7Tree-Jump2Moon-Sing5Star")
+ * 
+ * @param wordCount Number of words in the passphrase (default: 4)
+ * @returns A random passphrase string
+ */
+export function generateRandomPassphrase(wordCount: number = 4): string {
+  const adjectives = [
+    "Blue", "Red", "Green", "Gold", "Dark", "Bright", "Swift", "Calm",
+    "Bold", "Eager", "Fierce", "Gentle", "Happy", "Jolly", "Kind", "Lively",
+    "Mighty", "Noble", "Proud", "Quick", "Rare", "Strong", "True", "Unique",
+    "Vivid", "Warm", "Young", "Zesty"
+  ];
+  
+  const nouns = [
+    "Kite", "Tree", "Moon", "Star", "River", "Cloud", "Stone", "Flame",
+    "Wind", "Snow", "Rain", "Fire", "Ice", "Rock", "Sky", "Sea",
+    "Sun", "Wave", "Leaf", "Bird", "Fish", "Wolf", "Bear", "Eagle",
+    "Tiger", "Lion", "Hawk", "Fox"
+  ];
+  
+  const verbs = [
+    "Run", "Jump", "Fly", "Sing", "Dance", "Play", "Dream", "Seek",
+    "Find", "Grow", "Shine", "Glow", "Flow", "Rise", "Fall", "Spin",
+    "Turn", "Leap", "Soar", "Sweep", "Glide", "Climb", "Rush", "Dash"
+  ];
+  
+  const words: string[] = [];
+  
+  for (let i = 0; i < wordCount; i++) {
+    // Each word group: Adjective + Number + Noun + Verb
+    const adj = adjectives[Math.floor(Math.random() * adjectives.length)];
+    const num = Math.floor(Math.random() * 10);
+    const noun = nouns[Math.floor(Math.random() * nouns.length)];
+    const verb = verbs[Math.floor(Math.random() * verbs.length)];
+    
+    // Randomly choose between two patterns
+    if (Math.random() > 0.5) {
+      words.push(`${adj}${num}${noun}`);
+    } else {
+      words.push(`${verb}${num}${noun}`);
+    }
+  }
+  
+  return words.join("-");
+}
+
+/**
+ * Copy text to clipboard
+ * 
+ * @param text Text to copy
+ * @returns Promise<boolean> True if successful
+ */
+export async function copyToClipboard(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    // Fallback for older browsers
+    const textArea = document.createElement("textarea");
+    textArea.value = text;
+    textArea.style.position = "fixed";
+    textArea.style.left = "-999999px";
+    document.body.appendChild(textArea);
+    textArea.select();
+    try {
+      document.execCommand("copy");
+      document.body.removeChild(textArea);
+      return true;
+    } catch {
+      document.body.removeChild(textArea);
+      return false;
+    }
+  }
+}

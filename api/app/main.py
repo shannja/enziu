@@ -37,6 +37,7 @@ from .models.schemas import (
     VoucherValidationResponse,
     VoucherRecoveryRequest,
 )
+from pydantic import BaseModel
 
 # Initialize services
 pdf_extractor = PDFExtractor()
@@ -304,6 +305,60 @@ async def recover_voucher(
 
     except Exception as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+class VoucherGenerateRequest(BaseModel):
+    """Request to generate a voucher after payment."""
+    pack_type: str
+    passphrase: str
+
+
+@limiter.limit(RATE_LIMITS["voucher"])
+@app.post("/api/voucher/generate", response_model=None)
+async def generate_voucher(
+    request: Request,
+    body: VoucherGenerateRequest
+) -> JSONResponse:
+    """
+    Generate a voucher after successful Paddle payment.
+    
+    This endpoint is called from the frontend after Paddle checkout completes.
+    In sandbox mode, we skip payment verification for testing.
+    """
+    try:
+        # Validate pack type
+        if body.pack_type not in ["PAYG", "Starter", "Pro", "Office"]:
+            raise HTTPException(
+                status_code=400, 
+                detail="Invalid pack type. Must be PAYG, Starter, Pro, or Office"
+            )
+        
+        # Validate passphrase length (minimum 8 characters)
+        if len(body.passphrase) < 8:
+            raise HTTPException(
+                status_code=400,
+                detail="Passphrase must be at least 8 characters long"
+            )
+        
+        # Create voucher
+        result = await voucher_service.create_voucher(
+            pack_type=body.pack_type,
+            passphrase=body.passphrase
+        )
+        
+        # Log the voucher generation
+        SecurityEventLogger.log_suspicious_activity(
+            activity="voucher_generated",
+            ip=request.client.host if request.client else "unknown",
+            details=f"pack_type={body.pack_type}"
+        )
+        
+        return JSONResponse(content=result)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @limiter.limit(RATE_LIMITS["voucher"])
