@@ -103,7 +103,7 @@ async def health_check(request) -> dict[str, str]:
 
 @app.post("/api/upload", response_model=UploadResponse)
 @limiter.limit(RATE_LIMITS["upload"])
-async def upload_policy(request, file: UploadFile = File(...)) -> UploadResponse:
+async def upload_policy(request, file: UploadFile = File(...)):
     """
     Upload and analyze a single insurance policy PDF.
     
@@ -151,7 +151,7 @@ async def upload_policy(request, file: UploadFile = File(...)) -> UploadResponse
 
 @app.post("/api/upload/batch", response_model=UploadResponse)
 @limiter.limit(RATE_LIMITS["upload"])
-async def upload_policy_batch(request, file: UploadFile = File(...)) -> UploadResponse:
+async def upload_policy_batch(request, file: UploadFile = File(...)):
     """
     Upload a policy for broker comparison mode.
     Upload two PDFs separately, then compare them.
