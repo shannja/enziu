@@ -5,56 +5,73 @@ Insurance Transparency Engine
 
 from __future__ import annotations
 
+import io
+import logging
+import time
+import uuid
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, UploadFile, File, HTTPException, Request
+
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-import io
-import uuid
-import time
-
-from .config import settings
-from .services.pdf_extractor import PDFExtractor
-from .services.inference import NScaleClient
-from .services.voucher import VoucherService
-from .services.security import (
-    SecurityHeadersMiddleware,
-    InputValidationMiddleware,
-    APIKeyMiddleware,
-    limiter,
-    SecurityEventLogger,
-    RATE_LIMITS,
-    rate_limit_exceeded_handler,
-)
+from pydantic import BaseModel
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
+
+from .config import settings
 from .models.schemas import (
-    UploadResponse,
     ChatRequest,
     ChatResponse,
     CompareRequest,
+    UploadResponse,
+    VoucherRecoveryRequest,
     VoucherValidationRequest,
     VoucherValidationResponse,
-    VoucherRecoveryRequest,
 )
-from pydantic import BaseModel
+from .services.inference import NScaleClient
+from .services.paddle import PaddleService
+from .services.pdf_extractor import PDFExtractor
+from .services.security import (
+    RATE_LIMITS,
+    APIKeyMiddleware,
+    InputValidationMiddleware,
+    SecurityEventLogger,
+    SecurityHeadersMiddleware,
+    limiter,
+    rate_limit_exceeded_handler,
+)
+from .services.voucher import VoucherService
 
-# Initialize services
+logger = logging.getLogger("main")
+logger.setLevel(logging.DEBUG if settings.debug else logging.INFO)
+
+# ---------------------------------------------------------------------------
+# Services
+# ---------------------------------------------------------------------------
+
 pdf_extractor = PDFExtractor()
 nscale_client = NScaleClient()
 voucher_service = VoucherService()
+paddle_service = PaddleService(voucher_service=voucher_service)
 
+
+# ---------------------------------------------------------------------------
+# Lifespan
+# ---------------------------------------------------------------------------
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Application lifespan manager for startup and shutdown events."""
     print(f"🚀 {settings.app_name} starting up...")
     print(f"📍 Mode: {'development' if settings.debug else 'production'}")
+    print(f"💳 Paddle: {'sandbox' if settings.paddle_sandbox else 'production'}")
     yield
     print("👋 Shutting down ENZIU API...")
 
 
-# Create FastAPI application
+# ---------------------------------------------------------------------------
+# App
+# ---------------------------------------------------------------------------
+
 app = FastAPI(
     title=settings.app_name,
     description="ENZIU Insurance Transparency Engine API - Zero data stored",
@@ -64,7 +81,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS middleware
+# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
@@ -73,61 +90,78 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Security middleware
+# Security
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(InputValidationMiddleware)
 app.add_middleware(APIKeyMiddleware)
 
-# Rate limiting middleware
+# Rate limiting
 app.add_middleware(SlowAPIMiddleware)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 
+# Routers
+app.include_router(paddle_service.get_router())  # mounts /api/paddle/*
+
 
 # ===========================================
-# Health check
+# Health
 # ===========================================
 
 @limiter.limit(RATE_LIMITS["health"])
 @app.get("/api/health")
-async def health_check(request: Request) -> dict[str, str]:
-    """Health check endpoint."""
+async def health_check(request: Request) -> dict:
     return {"status": "healthy", "timestamp": str(time.time())}
 
 
+@limiter.limit(RATE_LIMITS["health"])
+@app.get("/api/debug/config")
+async def debug_config(request: Request) -> dict:
+    """Debug endpoint — only useful in development."""
+    return {
+        "nscale_api_key": (
+            settings.nscale_service_token[:20] + "..."
+            if settings.nscale_service_token
+            else "NOT SET"
+        ),
+        "nscale_api_base": settings.nscale_api_base,
+        "nscale_model": settings.nscale_model,
+        "paddle_sandbox": settings.paddle_sandbox,
+        "debug": settings.debug,
+    }
+
+
 # ===========================================
-# PDF Upload Endpoints (Memory-Safe)
+# PDF Upload
 # ===========================================
 
 @limiter.limit(RATE_LIMITS["upload"])
 @app.post("/api/upload", response_model=None)
 async def upload_policy(request: Request, file: UploadFile = File(...)):
     """
-    Upload and analyze a single insurance policy PDF.
-
-    ZERO DISK WRITE: The file is processed entirely in memory using io.BytesIO.
-    No document content is ever written to disk.
-
-    Returns a sneak peek analysis for free, with option to pay for full report.
+    Upload and analyse a single insurance policy PDF.
+    ZERO DISK WRITE — processed entirely in memory via io.BytesIO.
+    Returns a free sneak-peek analysis; full report requires payment.
     """
-    if not file.filename or not file.filename.lower().endswith('.pdf'):
+    start_time = time.time()
+    client_ip = request.client.host if request.client else "unknown"
+    logger.info(f"upload_policy() - ip={client_ip}, filename={file.filename}")
+
+    if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are accepted")
 
     try:
-        # Read file into memory - ZERO DISK WRITE
         content = await file.read()
         buffer = io.BytesIO(content)
+        logger.debug(f"File read — {len(content)} bytes")
 
-        # Generate session ID
         session_id = str(uuid.uuid4())
 
-        # Extract text in memory using PyMuPDF
         extracted_text = pdf_extractor.extract_text(buffer)
+        logger.info(f"Text extracted — {len(extracted_text)} chars")
 
-        # Generate sneak peek analysis (free preview)
         sneak_peek = await nscale_client.analyze_sneak_peek(extracted_text, session_id)
 
-        # Store session data in Redis (no document content stored permanently)
         await nscale_client.store_session(session_id, {
             "mode": "customer",
             "created_at": time.time(),
@@ -136,15 +170,18 @@ async def upload_policy(request: Request, file: UploadFile = File(...)):
             "extracted_text": extracted_text,
         })
 
-        return UploadResponse(
-            session_id=session_id,
-            **sneak_peek
+        logger.info(
+            f"upload_policy() done — session={session_id}, "
+            f"grade={sneak_peek.get('grade', {}).get('overall')}, "
+            f"time={time.time() - start_time:.3f}s"
         )
+        return UploadResponse(session_id=session_id, **sneak_peek)
 
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Processing failed: {str(e)}")
+        logger.error(f"upload_policy() failed — {type(e).__name__}: {e}")
+        raise HTTPException(status_code=500, detail=f"Processing failed: {e}")
 
 
 @limiter.limit(RATE_LIMITS["upload"])
@@ -152,28 +189,27 @@ async def upload_policy(request: Request, file: UploadFile = File(...)):
 async def upload_policy_batch(request: Request, file: UploadFile = File(...)):
     """
     Upload a policy for broker comparison mode.
-    Upload two PDFs separately, then compare them.
-
-    ZERO DISK WRITE: All processing happens in memory.
+    ZERO DISK WRITE — all processing in memory.
     """
-    if not file.filename or not file.filename.lower().endswith('.pdf'):
+    start_time = time.time()
+    client_ip = request.client.host if request.client else "unknown"
+    logger.info("upload_policy_batch() - ip=%s, filename=%s", client_ip, file.filename)
+
+    if not file.filename or not file.filename.lower().endswith(".pdf"):
+        logger.warning("upload_policy_batch() - invalid file type: %s", file.filename)
         raise HTTPException(status_code=400, detail="Only PDF files are accepted")
 
     try:
-        # Read file into memory - ZERO DISK WRITE
         content = await file.read()
         buffer = io.BytesIO(content)
+        logger.debug("upload_policy_batch() - file read: %d bytes", len(content))
 
-        # Generate session ID
         session_id = str(uuid.uuid4())
-
-        # Extract text in memory using PyMuPDF
         extracted_text = pdf_extractor.extract_text(buffer)
+        logger.info("upload_policy_batch() - text extracted: %d chars", len(extracted_text))
 
-        # Generate analysis for this policy
         analysis = await nscale_client.analyze_policy(extracted_text, session_id)
 
-        # Store session data
         await nscale_client.store_session(session_id, {
             "mode": "broker",
             "created_at": time.time(),
@@ -182,43 +218,39 @@ async def upload_policy_batch(request: Request, file: UploadFile = File(...)):
             "extracted_text": extracted_text,
         })
 
-        return UploadResponse(
-            session_id=session_id,
-            **analysis
+        logger.info(
+            "upload_policy_batch() done - session=%s, grade=%s, time=%.3fs",
+            session_id,
+            analysis.get("grade", {}).get("overall", "unknown"),
+            time.time() - start_time,
         )
+        return UploadResponse(session_id=session_id, **analysis)
 
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Processing failed: {str(e)}")
+        logger.error("upload_policy_batch() failed - %s: %s", type(e).__name__, e)
+        raise HTTPException(status_code=500, detail=f"Processing failed: {e}")
 
 
 # ===========================================
-# Chat / Deep Dive Endpoints
+# Chat / Deep Dive
 # ===========================================
 
 @limiter.limit(RATE_LIMITS["chat"])
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat(request: Request, body: ChatRequest) -> ChatResponse:
-    """
-    Deep Dive Q&A for a single policy.
-
-    Every response includes:
-    - Page citations
-    - "Not legal advice" disclaimer
-    """
+    """Deep Dive Q&A for a single policy. Every response includes page citations."""
     try:
         response = await nscale_client.chat(
             session_id=body.session_id,
-            message=body.message
+            message=body.message,
         )
-
         return ChatResponse(
             response=response["response"],
             page=response.get("page"),
-            disclaimer="page X — not legal advice"
+            disclaimer="page X — not legal advice",
         )
-
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -226,152 +258,68 @@ async def chat(request: Request, body: ChatRequest) -> ChatResponse:
 @limiter.limit(RATE_LIMITS["chat"])
 @app.post("/api/compare", response_model=ChatResponse)
 async def compare(request: Request, body: CompareRequest) -> ChatResponse:
-    """
-    Comparative Q&A for broker mode.
-    Analyzes both policies together for data-backed comparisons.
-    """
+    """Comparative Q&A for broker mode — analyses both policies together."""
     try:
         response = await nscale_client.compare(
             session_id=body.session_id,
             message=body.message,
             policyA=body.policyA,
-            policyB=body.policyB
+            policyB=body.policyB,
         )
-
         return ChatResponse(
             response=response["response"],
-            disclaimer="page X — not legal advice"
+            disclaimer="page X — not legal advice",
         )
-
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 # ===========================================
-# Voucher Endpoints
+# Voucher
 # ===========================================
 
 @limiter.limit(RATE_LIMITS["voucher"])
 @app.post("/api/voucher/validate", response_model=VoucherValidationResponse)
 async def validate_voucher(
-    request: Request,
-    body: VoucherValidationRequest
+    request: Request, body: VoucherValidationRequest
 ) -> VoucherValidationResponse:
     """
-    Validate a voucher code with HMAC fast rejection.
-
-    Security:
-    1. HMAC validation for fast rejection of fake codes
-    2. Bcrypt verification for passphrase
-    3. Atomic credit decrement in Redis
+    Validate a voucher code + passphrase.
+    1. Format check  2. Redis lookup  3. Bcrypt verify  4. Credit check
     """
     try:
         result = await voucher_service.validate(
-            code=body.code,
-            passphrase=body.passphrase
+            code=body.code, passphrase=body.passphrase
         )
-
         return VoucherValidationResponse(
             valid=result["valid"],
             credits=result.get("credits", 0),
             packType=result.get("pack_type"),
-            error=result.get("error")
+            error=result.get("error"),
         )
-
     except Exception as e:
-        return VoucherValidationResponse(
-            valid=False,
-            error=str(e)
-        )
+        return VoucherValidationResponse(valid=False, error=str(e))
 
 
 @limiter.limit(RATE_LIMITS["voucher"])
 @app.post("/api/voucher/recover")
 async def recover_voucher(
-    request: Request,
-    body: VoucherRecoveryRequest
+    request: Request, body: VoucherRecoveryRequest
 ) -> JSONResponse:
-    """
-    Recover a lost voucher code using passphrase.
-
-    No email required - just the passphrase hash lookup.
-    """
+    """Recover a lost voucher code using passphrase only. No email required."""
     try:
-        result = await voucher_service.recover(
-            passphrase=body.passphrase
-        )
-
+        result = await voucher_service.recover(passphrase=body.passphrase)
         return JSONResponse(content=result)
-
     except Exception as e:
         raise HTTPException(status_code=404, detail=str(e))
-
-
-class VoucherGenerateRequest(BaseModel):
-    """Request to generate a voucher after payment."""
-    pack_type: str
-    passphrase: str
-
-
-@limiter.limit(RATE_LIMITS["voucher"])
-@app.post("/api/voucher/generate", response_model=None)
-async def generate_voucher(
-    request: Request,
-    body: VoucherGenerateRequest
-) -> JSONResponse:
-    """
-    Generate a voucher after successful Paddle payment.
-    
-    This endpoint is called from the frontend after Paddle checkout completes.
-    In sandbox mode, we skip payment verification for testing.
-    """
-    try:
-        # Validate pack type
-        if body.pack_type not in ["PAYG", "Starter", "Pro", "Office"]:
-            raise HTTPException(
-                status_code=400, 
-                detail="Invalid pack type. Must be PAYG, Starter, Pro, or Office"
-            )
-        
-        # Validate passphrase length (minimum 8 characters)
-        if len(body.passphrase) < 8:
-            raise HTTPException(
-                status_code=400,
-                detail="Passphrase must be at least 8 characters long"
-            )
-        
-        # Create voucher
-        result = await voucher_service.create_voucher(
-            pack_type=body.pack_type,
-            passphrase=body.passphrase
-        )
-        
-        # Log the voucher generation
-        SecurityEventLogger.log_suspicious_activity(
-            activity="voucher_generated",
-            ip=request.client.host if request.client else "unknown",
-            details=f"pack_type={body.pack_type}"
-        )
-        
-        return JSONResponse(content=result)
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 @limiter.limit(RATE_LIMITS["voucher"])
 @app.post("/api/voucher/decrement")
 async def decrement_credits(
-    request: Request,
-    session_id: str,
-    code: str
+    request: Request, session_id: str, code: str
 ) -> JSONResponse:
-    """
-    Atomically decrement voucher credits.
-    Prevents double-spending.
-    """
+    """Atomically decrement voucher credits — prevents double-spending."""
     try:
         result = await voucher_service.decrement(code)
         return JSONResponse(content=result)
@@ -380,37 +328,15 @@ async def decrement_credits(
 
 
 # ===========================================
-# Session Management
+# Session
 # ===========================================
 
 @limiter.limit(RATE_LIMITS["general"])
 @app.post("/api/session/end")
 async def end_session(request: Request, session_id: str) -> JSONResponse:
-    """
-    End a session and wipe all data.
-
-    Called when user closes the tab.
-    All session data is permanently deleted.
-    """
+    """End a session and wipe all associated data permanently."""
     try:
         await nscale_client.end_session(session_id)
-        return JSONResponse(content={"status": "deleted"})
     except Exception:
-        # Still return success even if session doesn't exist
-        return JSONResponse(content={"status": "deleted"})
-
-
-# ===========================================
-# Paddle Webhooks
-# ===========================================
-
-@limiter.limit(RATE_LIMITS["general"])
-@app.post("/api/paddle/webhook")
-async def paddle_webhook(request: Request) -> JSONResponse:
-    """
-    Handle Paddle payment webhooks.
-
-    Creates voucher codes on successful payment.
-    """
-    # TODO: Implement Paddle webhook handling
-    return JSONResponse(content={"status": "received"})
+        pass  # Return success even if session doesn't exist
+    return JSONResponse(content={"status": "deleted"})

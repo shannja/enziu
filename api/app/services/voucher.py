@@ -1,80 +1,74 @@
 """
 ENZIU Voucher Service
-Privacy-first voucher validation and management.
+Privacy-first voucher creation, validation, and recovery.
 
-Security features:
-- HMAC validation for fast rejection of fake codes
-- Bcrypt passphrase hashing
-- Atomic credit operations in Redis
-- Zero PII storage (no email required)
+Security design:
+- HMAC for fast rejection of structurally invalid codes
+- bcrypt for passphrase hashing (never stored in plaintext)
+- Atomic credit operations via Redis DECR
+- Zero PII — no email, no identity, code + passphrase hash only
+
+Storage:
+- Development / hackathon: in-memory dict (resets on restart)
+- Production: swap _get / _store for Upstash Redis calls
 """
 
 from __future__ import annotations
 
 import hmac
 import hashlib
-import secrets
+import logging
 import re
+import secrets
+import string
 import time
 from typing import Any
 
 import bcrypt
 
-from ..config import settings
+from ..config import settings, MIN_PASSPHRASE_LENGTH
+
+logger = logging.getLogger("voucher")
+logger.setLevel(logging.DEBUG if settings.debug else logging.INFO)
 
 
-# ===========================================
-# Voucher Code Generation
-# ===========================================
+# ---------------------------------------------------------------------------
+# In-memory store (hackathon)
+# Replace _get_voucher and _store_voucher bodies with Upstash Redis for prod.
+# ---------------------------------------------------------------------------
 
-def generate_voucher_code() -> str:
-    """
-    Generate a cryptographically secure voucher code.
-    
-    Format: ENZ-XXXX-XXXX-XXXX (4 groups of 4 alphanumeric chars)
-    Example: ENZ-R9T2-K8P1-XQ9W
-    """
-    chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"  # No I, O, 0, 1 for clarity
-    groups: list[str] = []
-    
-    for _ in range(3):
-        group = "".join(secrets.choice(chars) for _ in range(4))
-        groups.append(group)
-    
-    return f"ENZ-{groups[0]}-{groups[1]}-{groups[2]}"
+_store: dict[str, dict[str, Any]] = {}
 
 
-def validate_voucher_format(code: str) -> bool:
-    """
-    Validate voucher code format.
-    
-    Args:
-        code: Voucher code to validate
-        
-    Returns:
-        True if format is valid
-    """
-    pattern = r"^ENZ-[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$"
-    return bool(re.match(pattern, code.upper()))
+# ---------------------------------------------------------------------------
+# Code generation
+# ---------------------------------------------------------------------------
+
+# Character set excludes I, O, 0, 1 to avoid visual confusion
+_CHARSET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+_CODE_PATTERN = re.compile(
+    r"^ENZ-[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$"
+)
 
 
-# ===========================================
-# HMAC Validation
-# ===========================================
+def _generate_code() -> str:
+    """Generate a cryptographically secure voucher code: ENZ-XXXX-XXXX-XXXX"""
+    segments = [
+        "".join(secrets.choice(_CHARSET) for _ in range(4))
+        for _ in range(3)
+    ]
+    return f"ENZ-{segments[0]}-{segments[1]}-{segments[2]}"
 
-def compute_hmac(code: str) -> str:
-    """
-    Compute HMAC for a voucher code.
-    
-    Used for fast rejection of obviously fake codes
-    before hitting Redis.
-    
-    Args:
-        code: Voucher code
-        
-    Returns:
-        HMAC hex digest
-    """
+
+def _valid_format(code: str) -> bool:
+    return bool(_CODE_PATTERN.match(code.upper()))
+
+
+# ---------------------------------------------------------------------------
+# HMAC (fast structural rejection before Redis hit)
+# ---------------------------------------------------------------------------
+
+def _sign(code: str) -> str:
     return hmac.new(
         settings.voucher_hmac_secret.encode(),
         code.encode(),
@@ -82,237 +76,215 @@ def compute_hmac(code: str) -> str:
     ).hexdigest()
 
 
-def validate_hmac(code: str, expected_hmac: str) -> bool:
-    """
-    Validate HMAC for a voucher code.
-    
-    Args:
-        code: Voucher code
-        expected_hmac: Expected HMAC value
-        
-    Returns:
-        True if HMAC matches
-    """
-    computed = compute_hmac(code)
-    return hmac.compare_digest(computed, expected_hmac)
+# ---------------------------------------------------------------------------
+# Passphrase hashing
+# ---------------------------------------------------------------------------
+
+def _hash_passphrase(passphrase: str) -> str:
+    return bcrypt.hashpw(passphrase.encode(), bcrypt.gensalt(rounds=12)).decode()
 
 
-# ===========================================
-# Bcrypt Passphrase Hashing
-# ===========================================
-
-def hash_passphrase(passphrase: str) -> str:
-    """
-    Hash a passphrase using bcrypt.
-    
-    Args:
-        passphrase: Plain text passphrase
-        
-    Returns:
-        Bcrypt hash
-    """
-    return bcrypt.hashpw(
-        passphrase.encode(),
-        bcrypt.gensalt(rounds=12),
-    ).decode()
-
-
-def verify_passphrase(passphrase: str, hashed: str) -> bool:
-    """
-    Verify a passphrase against a bcrypt hash.
-    
-    Args:
-        passphrase: Plain text passphrase
-        hashed: Bcrypt hash to verify against
-        
-    Returns:
-        True if passphrase matches
-    """
+def _check_passphrase(passphrase: str, hashed: str) -> bool:
     try:
-        return bcrypt.checkpw(
-            passphrase.encode(),
-            hashed.encode(),
-        )
+        return bcrypt.checkpw(passphrase.encode(), hashed.encode())
     except (ValueError, TypeError):
         return False
 
 
-# ===========================================
-# Voucher Service
-# ===========================================
+# ---------------------------------------------------------------------------
+# Low-level storage — swap these two functions for Redis in production
+# ---------------------------------------------------------------------------
+
+async def _get_voucher(code: str) -> dict[str, Any] | None:
+    """
+    Retrieve voucher data by code.
+    Production: return await redis.get(f"voucher:{code}")
+    """
+    return _store.get(code)
+
+
+async def _store_voucher(code: str, data: dict[str, Any]) -> None:
+    """
+    Persist voucher data.
+    Production: await redis.set(f"voucher:{code}", data, ex=ttl)
+    """
+    _store[code] = data
+
+
+async def _decrement_credits(code: str) -> int:
+    """
+    Atomically decrement credits and return the new value.
+    Production: return await redis.decr(f"voucher:{code}:credits")
+    """
+    voucher = _store.get(code)
+    if not voucher:
+        return -1
+    voucher["credits"] = max(0, voucher["credits"] - 1)
+    return voucher["credits"]
+
+
+# ---------------------------------------------------------------------------
+# Pack catalogue
+# ---------------------------------------------------------------------------
+
+PACKS: dict[str, dict[str, Any]] = {
+    "PAYG":    {"price": 4.99,  "credits": 1,  "chats_per_session": 5},
+    "Starter": {"price": 50.00, "credits": 10, "chats_per_session": 10},
+    "Pro":     {"price": 100.00,"credits": 25, "chats_per_session": 20},
+    "Office":  {"price": 200.00,"credits": 50, "chats_per_session": 20},
+}
+
+
+# ---------------------------------------------------------------------------
+# VoucherService
+# ---------------------------------------------------------------------------
 
 class VoucherService:
     """
-    Service for voucher validation and management.
-    
-    All operations are designed for privacy:
-    - No email storage
-    - No persistent identity
-    - Code + passphrase hash only
+    All voucher lifecycle operations.
+    Paddle routes call create_voucher(); everything else is for consumers.
     """
-    
-    # Voucher pack configurations
-    PACKS: dict[str, dict[str, Any]] = {
-        "PAYG": {"price": 4.99, "credits": 1, "chats": 5},
-        "Starter": {"price": 50, "credits": 10, "chats": 10},
-        "Pro": {"price": 100, "credits": 25, "chats": 20},
-        "Office": {"price": 200, "credits": 50, "chats": 20},
-    }
-    
-    def __init__(self) -> None:
-        self.hmac_secret = settings.voucher_hmac_secret
-    
-    async def validate(
-        self, code: str, passphrase: str
-    ) -> dict[str, Any]:
-        """
-        Validate a voucher code with passphrase.
-        
-        Flow:
-        1. Format validation
-        2. HMAC fast rejection
-        3. Redis lookup
-        4. Bcrypt passphrase verification
-        5. Credit balance check
-        
-        Args:
-            code: Voucher code
-            passphrase: User's passphrase
-            
-        Returns:
-            Validation result with credits if valid
-        """
-        # Step 1: Format validation
-        if not validate_voucher_format(code):
-            return {"valid": False, "error": "Invalid voucher code format"}
-        
-        # Step 2: HMAC validation (fast rejection)
-        # In production, the HMAC would be stored with the voucher
-        # For now, we compute and check format
-        code_upper = code.upper()
-        
-        # Step 3: Redis lookup (simulated)
-        # In production: voucher_data = await redis.get(f"voucher:{code_upper}")
-        voucher_data = await self._get_voucher_from_redis(code_upper)
-        
-        if not voucher_data:
-            return {"valid": False, "error": "Voucher code not found"}
-        
-        # Step 4: Bcrypt passphrase verification
-        if not verify_passphrase(passphrase, voucher_data["passphrase_hash"]):
-            return {"valid": False, "error": "Invalid passphrase"}
-        
-        # Step 5: Credit balance check
-        credits = voucher_data.get("credits", 0)
-        if credits <= 0:
-            return {"valid": False, "error": "No credits remaining"}
-        
-        return {
-            "valid": True,
-            "credits": credits,
-            "pack_type": voucher_data.get("pack_type", "Unknown"),
-        }
-    
-    async def recover(self, passphrase: str) -> dict[str, Any]:
-        """
-        Recover a voucher code using passphrase.
-        
-        Searches all vouchers for matching passphrase hash.
-        No email required.
-        
-        Args:
-            passphrase: User's passphrase
-            
-        Returns:
-            Voucher code if found
-        """
-        # In production, this would search Redis for matching passphrase hash
-        # For now, return not found
-        return {"valid": False, "error": "No voucher found for this passphrase"}
-    
-    async def decrement(self, code: str) -> dict[str, Any]:
-        """
-        Atomically decrement voucher credits.
-        
-        Uses Redis DECR to prevent double-spending.
-        
-        Args:
-            code: Voucher code
-            
-        Returns:
-            Remaining credits
-        """
-        code_upper = code.upper()
-        
-        # In production: remaining = await redis.decr(f"voucher:{code_upper}:credits")
-        # For now, simulate
-        return {"remaining": 0}
-    
+
+    # ------------------------------------------------------------------
+    # Create (called by paddle.verify_payment after confirmed payment)
+    # ------------------------------------------------------------------
+
     async def create_voucher(
         self,
         pack_type: str,
         passphrase: str,
+        transaction_id: str = "",
     ) -> dict[str, Any]:
         """
-        Create a new voucher.
-        
-        Called after successful Paddle payment.
-        
+        Generate and persist a new voucher after a confirmed Paddle payment.
+
         Args:
-            pack_type: Pack type (PAYG, Starter, Pro, Office)
-            passphrase: User's chosen passphrase
-            
+            pack_type:      One of PAYG | Starter | Pro | Office
+            passphrase:     User-chosen recovery passphrase (min 8 chars)
+            transaction_id: Paddle transaction ID — stored for audit only
+
         Returns:
-            Voucher code and details
+            dict with code, credits, chats_per_session, pack_type
         """
-        if pack_type not in self.PACKS:
-            raise ValueError(f"Invalid pack type: {pack_type}")
-        
-        pack = self.PACKS[pack_type]
-        
-        # Generate code
-        code = generate_voucher_code()
-        
-        # Hash passphrase
-        passphrase_hash = hash_passphrase(passphrase)
-        
-        # Store in Redis (simulated)
-        voucher_data: dict[str, Any] = {
+        if pack_type not in PACKS:
+            raise ValueError(f"Unknown pack_type '{pack_type}'")
+
+        if len(passphrase) < MIN_PASSPHRASE_LENGTH:
+            raise ValueError(f"Passphrase must be at least {MIN_PASSPHRASE_LENGTH} characters")
+
+        pack = PACKS[pack_type]
+        code = _generate_code()
+        passphrase_hash = _hash_passphrase(passphrase)
+        hmac_sig = _sign(code)
+
+        record: dict[str, Any] = {
             "code": code,
             "passphrase_hash": passphrase_hash,
+            "hmac": hmac_sig,
             "pack_type": pack_type,
             "credits": pack["credits"],
-            "chats_per_session": pack["chats"],
+            "chats_per_session": pack["chats_per_session"],
+            "transaction_id": transaction_id,  # audit trail only
             "created_at": time.time(),
         }
-        
-        await self._store_voucher_in_redis(code, voucher_data)
-        
+
+        await _store_voucher(code, record)
+
+        logger.info(
+            "Voucher created — code=%s... pack=%s credits=%d txn=%s",
+            code[:8],
+            pack_type,
+            pack["credits"],
+            transaction_id or "n/a",
+        )
+
         return {
             "code": code,
             "credits": pack["credits"],
-            "chats_per_session": pack["chats"],
+            "chats_per_session": pack["chats_per_session"],
             "pack_type": pack_type,
         }
-    
-    async def _get_voucher_from_redis(
-        self, code: str
-    ) -> dict[str, Any] | None:
+
+    # ------------------------------------------------------------------
+    # Validate (called by consumer endpoints)
+    # ------------------------------------------------------------------
+
+    async def validate(self, code: str, passphrase: str) -> dict[str, Any]:
         """
-        Retrieve voucher data from Redis.
-        
-        In production, this connects to Upstash Redis.
+        Validate a voucher code + passphrase.
+
+        Steps:
+        1. Format check
+        2. Storage lookup
+        3. HMAC structural check
+        4. bcrypt passphrase check
+        5. Credit balance check
         """
-        # TODO: Implement Redis connection
-        return None
-    
-    async def _store_voucher_in_redis(
-        self, code: str, data: dict[str, Any]
-    ) -> None:
+        code = code.upper().strip()
+
+        if not _valid_format(code):
+            return {"valid": False, "error": "Invalid voucher code format"}
+
+        record = await _get_voucher(code)
+        if not record:
+            return {"valid": False, "error": "Voucher code not found"}
+
+        # HMAC check — catches tampered codes that somehow passed format validation
+        if not hmac.compare_digest(_sign(code), record.get("hmac", "")):
+            logger.warning("HMAC mismatch for code %s...", code[:8])
+            return {"valid": False, "error": "Voucher code not found"}
+
+        if not _check_passphrase(passphrase, record["passphrase_hash"]):
+            return {"valid": False, "error": "Invalid passphrase"}
+
+        credits: int = record.get("credits", 0)
+        if credits <= 0:
+            return {"valid": False, "error": "No credits remaining"}
+
+        return {
+            "valid": True,
+            "credits": credits,
+            "pack_type": record.get("pack_type", "Unknown"),
+        }
+
+    # ------------------------------------------------------------------
+    # Recover
+    # ------------------------------------------------------------------
+
+    async def recover(self, passphrase: str) -> dict[str, Any]:
         """
-        Store voucher data in Redis.
-        
-        In production, this connects to Upstash Redis.
+        Recover a voucher code by scanning for a matching passphrase hash.
+        No email required.
+
+        NOTE: For production with Redis, maintain a secondary index:
+            passphrase_prefix → [code, ...] to avoid full scan.
         """
-        # TODO: Implement Redis connection
-        pass
+        for code, record in _store.items():
+            if _check_passphrase(passphrase, record.get("passphrase_hash", "")):
+                logger.info("Voucher recovered — code=%s...", code[:8])
+                return {
+                    "found": True,
+                    "code": code,
+                    "credits": record.get("credits", 0),
+                    "pack_type": record.get("pack_type"),
+                }
+
+        return {"found": False, "error": "No voucher found for this passphrase"}
+
+    # ------------------------------------------------------------------
+    # Decrement
+    # ------------------------------------------------------------------
+
+    async def decrement(self, code: str) -> dict[str, Any]:
+        """
+        Atomically consume one credit from a voucher.
+        Prevents double-spending.
+        """
+        code = code.upper().strip()
+        remaining = await _decrement_credits(code)
+
+        if remaining < 0:
+            raise ValueError("Voucher not found")
+
+        logger.info("Credit decremented — code=%s... remaining=%d", code[:8], remaining)
+        return {"remaining": remaining}

@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
-import { Check, Zap, RefreshCw, Copy, AlertTriangle, X } from "lucide-react";
+import { Check, Zap, RefreshCw, Copy, AlertTriangle, X, AlignLeft } from "lucide-react";
 import { formatCurrency, generateRandomPassphrase, copyToClipboard } from "@/lib/utils";
 
 interface VoucherPacksProps {
@@ -61,30 +61,6 @@ const packs: VoucherPack[] = [
   },
 ];
 
-declare global {
-  interface Window {
-    Paddle?: {
-      Environment: {
-        set: (env: "sandbox" | "production") => void;
-      };
-      Checkout: {
-        open: (options: {
-          settings: {
-            mode: "payment";
-            allowLogout?: boolean;
-          };
-          items: Array<{ priceId: string; quantity?: number }>;
-          customer?: { email?: string };
-          customData?: Record<string, unknown>;
-        }) => void;
-      };
-      Events?: {
-        subscribe: (eventType: string, callback: (event: unknown) => void) => void;
-      };
-      initialize: (token: string) => void;
-    };
-  }
-}
 
 export function VoucherPacks({ onPaymentComplete }: VoucherPacksProps) {
   const [selectedPack, setSelectedPack] = useState<VoucherPack | null>(null);
@@ -107,7 +83,7 @@ export function VoucherPacks({ onPaymentComplete }: VoucherPacksProps) {
           console.error("Paddle client token not configured");
           return;
         }
-        window.Paddle.initialize(clientToken);
+        window.Paddle.Initialize({ token: clientToken });
         window.Paddle.Environment.set("sandbox");
         setIsPaddleLoaded(true);
       }
@@ -151,10 +127,6 @@ export function VoucherPacks({ onPaymentComplete }: VoucherPacksProps) {
     setShowPassphraseModal(false);
 
     window.Paddle.Checkout.open({
-      settings: {
-        mode: "payment",
-        allowLogout: true,
-      },
       items: [
         {
           priceId: selectedPack.priceId,
@@ -166,39 +138,7 @@ export function VoucherPacks({ onPaymentComplete }: VoucherPacksProps) {
       },
     });
 
-    // Subscribe to checkout completion
-    if (window.Paddle.Events) {
-      window.Paddle.Events.subscribe("checkout.completed", async (event: unknown) => {
-        try {
-          // Call backend to generate voucher
-          const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/voucher/generate`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              pack_type: selectedPack.name,
-              passphrase: passphrase,
-            }),
-          });
-
-          if (!response.ok) {
-            throw new Error("Failed to generate voucher");
-          }
-
-          const result = await response.json();
-          setGeneratedVoucher(result.code);
-          setIsProcessing(false);
-          
-          // Notify parent component
-          onPaymentComplete(result.code, selectedPack.name);
-        } catch (error) {
-          console.error("Error generating voucher:", error);
-          setIsProcessing(false);
-          alert("Payment successful but voucher generation failed. Please contact support.");
-        }
-      });
-    }
+    // Note: Event handling is done via fallback timeout below
 
     // Fallback: simulate completion for demo if event doesn't fire
     setTimeout(() => {
@@ -376,12 +316,12 @@ export function VoucherPacks({ onPaymentComplete }: VoucherPacksProps) {
               <CardTitle className="text-lg text-white">
                 Set Recovery Passphrase
               </CardTitle>
-              <button
+              <Button
                 onClick={closePassphraseModal}
                 className="text-muted-foreground hover:text-white"
               >
                 <X className="w-5 h-5" />
-              </button>
+              </Button>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="bg-blue-900/30 border border-blue-700/50 rounded-lg p-3 text-xs space-y-2">
@@ -391,7 +331,8 @@ export function VoucherPacks({ onPaymentComplete }: VoucherPacksProps) {
                     <p className="text-blue-200 mb-1">
                       <strong>Why you need a passphrase:</strong>
                     </p>
-                    <ul className="text-blue-100/80 space-y-1">
+                    {/* Added list-none and pl-0 to flush the list left */}
+                    <ul className="text-blue-100/80 space-y-1 list-none pl-0">
                       <li>• No email required - complete privacy</li>
                       <li>• Use this to recover your voucher if lost</li>
                       <li>• Choose something memorable but secure</li>

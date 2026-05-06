@@ -12,6 +12,7 @@ Provides:
 from __future__ import annotations
 
 import json
+import logging
 import time
 from typing import Any
 
@@ -20,6 +21,9 @@ import httpx
 from ..config import settings
 from ..prompts import SNEAK_PEEK_PROMPT, ENZIU_INDEX_PROMPT, DEEP_DIVE_PROMPT, COMPARE_PROMPT
 
+# Configure logging for inference
+logger = logging.getLogger("inference")
+logger.setLevel(logging.DEBUG if settings.debug else logging.INFO)
 
 # Prompts are loaded from markdown files in api/app/prompts/
 # Edit the .md files to customize the AI behavior
@@ -31,13 +35,15 @@ class NScaleClient:
     """
     
     def __init__(self) -> None:
-        self.api_key = settings.nscale_api_key
+        self.api_key = settings.nscale_service_token
         self.api_base = settings.nscale_api_base
         self.model = settings.nscale_model
         self.headers: dict[str, str] = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
+        logger.info(f"NScaleClient initialized - model: {self.model}, api_base: {self.api_base}")
+        logger.debug(f"API key prefix: {self.api_key[:8]}..." if self.api_key else "No API key configured")
     
     async def _complete(
         self,
@@ -58,6 +64,13 @@ class NScaleClient:
         Returns:
             Generated text response
         """
+        start_time = time.time()
+        prompt_preview = prompt[:200] + "..." if len(prompt) > 200 else prompt
+        
+        logger.debug(f"_complete() called - temp={temperature}, max_tokens={max_tokens}")
+        logger.debug(f"Prompt preview: {prompt_preview}")
+        logger.debug(f"System prompt: {system_prompt[:100]}...")
+        
         payload: dict[str, Any] = {
             "model": self.model,
             "messages": [
@@ -68,15 +81,54 @@ class NScaleClient:
             "max_tokens": max_tokens,
         }
         
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            response = await client.post(
-                f"{self.api_base}/chat/completions",
-                headers=self.headers,
-                json=payload,
-            )
-            response.raise_for_status()
-            data = response.json()
-            return data["choices"][0]["message"]["content"]
+        logger.info(f"Sending NScale request - model={self.model}, temp={temperature}, max_tokens={max_tokens}")
+        logger.debug(f"API endpoint: {self.api_base}/chat/completions")
+        logger.debug(f"API key prefix: {self.api_key[:8]}..." if self.api_key else "No API key")
+        
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                logger.debug("HTTP client created, sending POST request...")
+                response = await client.post(
+                    f"{self.api_base}/chat/completions",
+                    headers=self.headers,
+                    json=payload,
+                )
+                
+                elapsed = time.time() - start_time
+                logger.info(f"NScale response - status={response.status_code}, time={elapsed:.2f}s")
+                
+                if response.status_code != 200:
+                    logger.error(f"NScale API error: {response.status_code} - {response.text[:500]}")
+                    raise Exception(f"NScale API error: {response.status_code} - {response.text}")
+                
+                data = response.json()
+                
+                # Extract response content
+                if "choices" in data and len(data["choices"]) > 0:
+                    content = data["choices"][0]["message"]["content"]
+                    logger.debug(f"Response content length: {len(content)} chars")
+                    logger.debug(f"Response preview: {content[:200]}...")
+                    
+                    # Log token usage if available
+                    if "usage" in data:
+                        usage = data["usage"]
+                        logger.debug(f"Token usage - prompt: {usage.get('prompt_tokens', 'N/A')}, completion: {usage.get('completion_tokens', 'N/A')}")
+                    
+                    logger.info(f"Successfully received response from NScale - {len(content)} chars")
+                    return content
+                else:
+                    logger.error(f"Unexpected response format: {data}")
+                    raise Exception(f"Unexpected NScale response format: {list(data.keys())}")
+                    
+        except httpx.ConnectTimeout:
+            logger.error("Connection timeout to NScale API - check network/firewall")
+            raise Exception("Connection timeout to NScale API")
+        except httpx.HTTPError as e:
+            logger.error(f"HTTP error calling NScale: {type(e).__name__} - {str(e)}")
+            raise
+        except Exception as e:
+            logger.error(f"Error calling NScale: {type(e).__name__} - {str(e)}")
+            raise
     
     async def analyze_sneak_peek(
         self, extracted_text: str, session_id: str
@@ -88,6 +140,10 @@ class NScaleClient:
         Full details require payment.
         Uses the dedicated SNEAK_PEEK_PROMPT for rapid pre-audit.
         """
+        start_time = time.time()
+        logger.info(f"analyze_sneak_peek() - session_id={session_id}, text_length={len(extracted_text)}")
+        logger.debug(f"Using SNEAK_PEEK_PROMPT for analysis")
+        
         prompt = f"""{SNEAK_PEEK_PROMPT}
 
 Policy text (excerpt for preview):
@@ -103,6 +159,8 @@ Analysis:"""
                 max_tokens=500,
             )
             
+            logger.debug(f"Raw response received: {response_text[:200]}...")
+            
             # Parse JSON response
             # Remove markdown code blocks if present
             response_text = response_text.strip()
@@ -112,8 +170,9 @@ Analysis:"""
                 response_text = response_text[:-3]
             
             analysis: dict[str, Any] = json.loads(response_text.strip())
+            logger.debug(f"Parsed JSON analysis: {list(analysis.keys())}")
             
-            return {
+            result = {
                 "grade": {
                     "overall": analysis.get("score_band", "C"),
                     "clarity": "C",
@@ -128,9 +187,33 @@ Analysis:"""
                 "policy_type": analysis.get("policy_type", "other"),
                 "carrier_name": analysis.get("carrier_name"),
             }
+            
+            elapsed = time.time() - start_time
+            logger.info(f"Sneak peek analysis completed - session_id={session_id}, time={elapsed:.2f}s")
+            logger.debug(f"Result: grade={result['grade']['overall']}, policy_type={result['policy_type']}")
+            
+            return result
         
-        except (json.JSONDecodeError, Exception) as e:
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON decode error in sneak peek: {str(e)}")
+            logger.debug(f"Response that failed to parse: {response_text[:500]}")
             # Return placeholder analysis on error
+            return {
+                "grade": {
+                    "overall": "C",
+                    "clarity": "C",
+                    "coverage": "C",
+                    "claimsEfficiency": "C",
+                },
+                "topRisk": "Unable to analyze policy at this time",
+                "redFlags": ["Analysis in progress"],
+                "summary": "Full analysis available after payment.",
+                "score_preview": "medium",
+                "policy_type": "other",
+                "carrier_name": None,
+            }
+        except Exception as e:
+            logger.error(f"Error in sneak peek analysis: {type(e).__name__} - {str(e)}")
             return {
                 "grade": {
                     "overall": "C",
@@ -154,6 +237,10 @@ Analysis:"""
         
         Returns complete ENZIU Index with detailed flags and citations.
         """
+        start_time = time.time()
+        logger.info(f"analyze_policy() - session_id={session_id}, text_length={len(extracted_text)}")
+        logger.debug(f"Using ENZIU_INDEX_PROMPT for full analysis")
+        
         prompt = f"""{ENZIU_INDEX_PROMPT}
 
 Full policy text:
@@ -167,6 +254,8 @@ Analysis:"""
                 system_prompt="You are an insurance policy analyst. Return valid JSON only.",
             )
             
+            logger.debug(f"Raw response received: {response_text[:200]}...")
+            
             # Parse JSON
             response_text = response_text.strip()
             if response_text.startswith("```json"):
@@ -175,8 +264,9 @@ Analysis:"""
                 response_text = response_text[:-3]
             
             analysis: dict[str, Any] = json.loads(response_text.strip())
+            logger.debug(f"Parsed JSON analysis keys: {list(analysis.keys())}")
             
-            return {
+            result = {
                 "grade": analysis.get("grade"),
                 "topRisk": analysis.get("topRisk"),
                 "redFlags": [
@@ -186,8 +276,27 @@ Analysis:"""
                 "summary": analysis.get("summary"),
                 "detailedFlags": analysis.get("redFlags", []),
             }
+            
+            elapsed = time.time() - start_time
+            logger.info(f"Full policy analysis completed - session_id={session_id}, time={elapsed:.2f}s, flags={len(result['redFlags'])}")
+            
+            return result
         
-        except Exception:
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON decode error in policy analysis: {str(e)}")
+            return {
+                "grade": {
+                    "overall": "C",
+                    "clarity": "C",
+                    "coverage": "C",
+                    "claimsEfficiency": "C",
+                },
+                "topRisk": "Analysis error",
+                "redFlags": [],
+                "summary": "Unable to complete analysis.",
+            }
+        except Exception as e:
+            logger.error(f"Error in policy analysis: {type(e).__name__} - {str(e)}")
             return {
                 "grade": {
                     "overall": "C",
@@ -206,6 +315,10 @@ Analysis:"""
         """
         Deep Dive Q&A for a single policy.
         """
+        start_time = time.time()
+        logger.info(f"chat() - session_id={session_id}, message_length={len(message)}")
+        logger.debug(f"Chat message: {message[:200]}...")
+        
         # Retrieve session data (in production, fetch from Redis)
         policy_text = ""  # Would be retrieved from session storage
         
@@ -225,8 +338,12 @@ Analysis:"""
             try:
                 page_str = response.lower().split("page ")[1].split()[0]
                 page = int("".join(filter(str.isdigit, page_str)))
+                logger.debug(f"Extracted page number: {page}")
             except (IndexError, ValueError):
-                pass
+                logger.debug("No page number found in response")
+        
+        elapsed = time.time() - start_time
+        logger.info(f"Chat response generated - session_id={session_id}, time={elapsed:.2f}s, response_length={len(response)}")
         
         return {
             "response": response,
@@ -244,6 +361,10 @@ Analysis:"""
         """
         Comparative analysis for broker mode.
         """
+        start_time = time.time()
+        logger.info(f"compare() - session_id={session_id}, gradeA={policyA.get('grade', {}).get('overall', 'Unknown')}, gradeB={policyB.get('grade', {}).get('overall', 'Unknown')}")
+        logger.debug(f"Comparison question: {message[:200]}...")
+        
         prompt = COMPARE_PROMPT.format(
             gradeA=policyA.get("grade", {}).get("overall", "Unknown"),
             summaryA=policyA.get("summary", ""),
@@ -256,6 +377,9 @@ Analysis:"""
             prompt=prompt,
             system_prompt="You are an insurance policy analyst comparing two policies.",
         )
+        
+        elapsed = time.time() - start_time
+        logger.info(f"Comparison completed - session_id={session_id}, time={elapsed:.2f}s, response_length={len(response)}")
         
         return {
             "response": response,

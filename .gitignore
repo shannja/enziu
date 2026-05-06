@@ -60,3 +60,4 @@ dump.rdb
 
 # Paddle
 .paddle/
+test_nscale.py

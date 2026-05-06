@@ -9,6 +9,8 @@ No document content is ever written to disk.
 from __future__ import annotations
 
 import io
+import logging
+import time
 from typing import Any
 
 try:
@@ -17,6 +19,12 @@ except ImportError:
     raise ImportError(
         "PyMuPDF (fitz) is required. Install with: pip install pymupdf"
     )
+
+from ..config import settings
+
+# Configure logging for PDF extraction
+logger = logging.getLogger("pdf_extractor")
+logger.setLevel(logging.DEBUG if settings.debug else logging.INFO)
 
 
 class PDFExtractor:
@@ -45,25 +53,50 @@ class PDFExtractor:
         Returns:
             Extracted text as a single string
         """
+        start_time = time.time()
+        buffer_size = buffer.tell()
+        buffer.seek(0, 2)
+        buffer_size = buffer.tell()
+        buffer.seek(0)
+        
+        logger.debug(f"Starting PDF text extraction - buffer size: {buffer_size} bytes")
+        
         # Open PDF from memory buffer
         doc = fitz.open(stream=buffer, filetype="pdf")
+        total_pages = len(doc)
+        logger.debug(f"PDF opened successfully - total pages: {total_pages}, extracting up to {self.max_pages} pages")
         
         try:
             # Limit pages for safety
             pages_to_extract = min(len(doc), self.max_pages)
+            logger.debug(f"Pages to extract: {pages_to_extract}/{total_pages}")
             
             text_parts: list[str] = []
+            total_chars = 0
+            
             for page_num in range(pages_to_extract):
+                page_start = time.time()
                 page = doc[page_num]
                 text = page.get_text("text")
+                page_time = time.time() - page_start
+                
                 if text.strip():
+                    char_count = len(text)
+                    total_chars += char_count
                     text_parts.append(f"[Page {page_num + 1}]\n{text}")
+                    logger.debug(f"Page {page_num + 1} extracted - {char_count} chars in {page_time:.3f}s")
+                else:
+                    logger.debug(f"Page {page_num + 1} - no text content")
+            
+            elapsed = time.time() - start_time
+            logger.info(f"PDF text extraction completed - {pages_to_extract} pages, {total_chars} total chars, {elapsed:.3f}s")
             
             return "\n\n".join(text_parts)
         
         finally:
             # Close document - no files left open
             doc.close()
+            logger.debug("PDF document closed")
     
     def extract_text_by_page(self, buffer: io.BytesIO) -> dict[int, str]:
         """
@@ -75,22 +108,33 @@ class PDFExtractor:
         Returns:
             Dictionary mapping page numbers (1-indexed) to text content
         """
+        start_time = time.time()
+        logger.debug("Starting page-by-page PDF extraction")
+        
         doc = fitz.open(stream=buffer, filetype="pdf")
+        total_pages = len(doc)
+        logger.debug(f"PDF opened - {total_pages} pages")
         
         try:
             pages_to_extract = min(len(doc), self.max_pages)
             result: dict[int, str] = {}
+            total_chars = 0
             
             for page_num in range(pages_to_extract):
                 page = doc[page_num]
                 text = page.get_text("text")
                 if text.strip():
                     result[page_num + 1] = text
+                    total_chars += len(text)
+            
+            elapsed = time.time() - start_time
+            logger.info(f"Page-by-page extraction completed - {len(result)} pages with text, {total_chars} chars, {elapsed:.3f}s")
             
             return result
         
         finally:
             doc.close()
+            logger.debug("PDF document closed")
     
     def extract_with_positions(
         self, buffer: io.BytesIO
@@ -104,17 +148,25 @@ class PDFExtractor:
         Returns:
             List of dicts with text, page, and bounding box positions
         """
+        start_time = time.time()
+        logger.debug("Starting PDF extraction with positions")
+        
         doc = fitz.open(stream=buffer, filetype="pdf")
+        total_pages = len(doc)
+        logger.debug(f"PDF opened - {total_pages} pages")
         
         try:
             pages_to_extract = min(len(doc), self.max_pages)
             result: list[dict[str, Any]] = []
+            total_blocks = 0
             
             for page_num in range(pages_to_extract):
                 page = doc[page_num]
                 
                 # Extract text blocks with positions
                 blocks = page.get_text("dict")["blocks"]
+                page_blocks = sum(1 for b in blocks if b["type"] == 0)
+                total_blocks += page_blocks
                 
                 for block in blocks:
                     if block["type"] == 0:  # Text block
@@ -129,11 +181,15 @@ class PDFExtractor:
                                         "font": span["font"],
                                         "size": span["size"],
                                     })
-        
+            
+            elapsed = time.time() - start_time
+            logger.info(f"Position extraction completed - {len(result)} text spans, {total_blocks} blocks, {elapsed:.3f}s")
+            
             return result
         
         finally:
             doc.close()
+            logger.debug("PDF document closed")
     
     def get_page_count(self, buffer: io.BytesIO) -> int:
         """
@@ -145,10 +201,13 @@ class PDFExtractor:
         Returns:
             Number of pages
         """
+        logger.debug("Getting PDF page count")
         doc = fitz.open(stream=buffer, filetype="pdf")
         
         try:
-            return len(doc)
+            page_count = len(doc)
+            logger.debug(f"PDF page count: {page_count}")
+            return page_count
         finally:
             doc.close()
     
@@ -165,7 +224,11 @@ class PDFExtractor:
         Returns:
             List of matches with page numbers and positions
         """
+        start_time = time.time()
+        logger.debug(f"Searching PDF for term: '{search_term}'")
+        
         doc = fitz.open(stream=buffer, filetype="pdf")
+        total_pages = len(doc)
         
         try:
             pages_to_extract = min(len(doc), self.max_pages)
@@ -176,6 +239,9 @@ class PDFExtractor:
                 
                 # Search for text
                 text_instances = page.search_for(search_term)
+                
+                if text_instances:
+                    logger.debug(f"Found {len(text_instances)} matches on page {page_num + 1}")
                 
                 for inst in text_instances:
                     matches.append({
@@ -189,7 +255,11 @@ class PDFExtractor:
                         "text": search_term,
                     })
             
+            elapsed = time.time() - start_time
+            logger.info(f"Text search completed - found {len(matches)} matches in {elapsed:.3f}s")
+            
             return matches
         
         finally:
             doc.close()
+            logger.debug("PDF document closed")

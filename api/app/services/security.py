@@ -17,15 +17,15 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
-from ..config import settings
+from ..config import settings, MIN_API_KEY_LENGTH, VALID_API_KEY_CHARS
 
 # Configure security logging
 logger = logging.getLogger("security")
-logger.setLevel(logging.INFO)
+logger.setLevel(logging.DEBUG if settings.debug else logging.INFO)
 
 # Create console handler
 console_handler = logging.StreamHandler()
-console_handler.setLevel(logging.INFO)
+console_handler.setLevel(logging.DEBUG if settings.debug else logging.INFO)
 formatter = logging.Formatter(
     '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
@@ -60,45 +60,46 @@ RATE_LIMITS = {
 # ===========================================
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
-    """Add security headers to all responses."""
+    """Add security headers to all responses.
     
+    IMPORTANT: CSP is intentionally restricted to API routes only.
+    Next.js manages its own CSP for HTML pages via next.config.js headers().
+    Applying a broad CSP here would overwrite the Next.js one (which includes
+    the Paddle-specific directives), breaking the checkout iframe.
+    """
+
+    # Minimal API-only CSP — APIs don't serve HTML or load external resources
+    API_CSP = "default-src 'none'; frame-ancestors 'none';"
+
     async def dispatch(
         self, request: Request, call_next: Callable[[Request], Awaitable[JSONResponse]]
     ) -> JSONResponse:
         response = await call_next(request)
-        
-        # Security headers
+
+        # Common security headers — safe to apply everywhere
         response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["X-Frame-Options"] = "DENY"
         response.headers["X-XSS-Protection"] = "1; mode=block"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-        
-        # Content Security Policy
-        csp = (
-            "default-src 'self'; "
-            "script-src 'self' 'unsafe-inline' https://cdn.paddle.com; "
-            "style-src 'self' 'unsafe-inline'; "
-            "img-src 'self' data: https:; "
-            "font-src 'self' data:; "
-            "connect-src 'self' https://api.nscale.com https://api.paddle.com; "
-            "frame-ancestors 'none'; "
-            "form-action 'self'; "
-            "base-uri 'self';"
-        )
-        response.headers["Content-Security-Policy"] = csp
-        
+
+        # Only set CSP (and X-Frame-Options) on API routes.
+        # Next.js owns the CSP for HTML pages — if we set it here it
+        # overwrites the Paddle-compatible policy in next.config.js.
+        if request.url.path.startswith("/api/"):
+            response.headers["Content-Security-Policy"] = self.API_CSP
+            response.headers["X-Frame-Options"] = "DENY"
+
         # HSTS (only in production)
         if not settings.debug:
             response.headers["Strict-Transport-Security"] = (
                 "max-age=31536000; includeSubDomains; preload"
             )
-        
-        # Remove server header
+
+        # Remove server fingerprinting headers
         if "Server" in response.headers:
             del response.headers["Server"]
         if "X-Powered-By" in response.headers:
             del response.headers["X-Powered-By"]
-        
+
         return response
 
 
@@ -235,13 +236,27 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
     
     def _validate_api_key(self, api_key: str) -> bool:
-        """Validate API key format and value."""
-        # Basic format validation
-        if not api_key or len(api_key) < 32:
+        """
+        Validate API key format and value.
+        
+        Args:
+            api_key: The API key to validate
+            
+        Returns:
+            True if valid, False otherwise
+        """
+        # Basic format validation - must be non-empty and meet minimum length
+        if not api_key or len(api_key) < MIN_API_KEY_LENGTH:
+            logger.debug("API key validation failed: invalid length (%d chars)", len(api_key) if api_key else 0)
             return False
         
-        # In production, validate against stored API keys
-        # For now, accept any key that meets minimum length
+        # Check for allowed characters (alphanumeric, hyphens, underscores)
+        if not all(c in VALID_API_KEY_CHARS for c in api_key):
+            logger.debug("API key validation failed: invalid characters")
+            return False
+        
+        # In production, validate against stored API keys from database/Redis
+        # For now, accept any key that meets format requirements
         return True
 
 

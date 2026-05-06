@@ -56,7 +56,7 @@ export function ComparativeQA({
     setChatsRemaining((prev) => prev - 1);
 
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/compare`, {
+      const response = await fetch(`/api/compare`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

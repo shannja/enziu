@@ -25,7 +25,7 @@ export function VoucherInput({ onValidated }: VoucherInputProps) {
     setError(null);
 
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/voucher/validate`, {
+      const response = await fetch(`/api/voucher/validate`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

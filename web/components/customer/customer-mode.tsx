@@ -43,7 +43,7 @@ export function CustomerMode() {
       // Start analysis
       setStep("analyzing");
 
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/upload`, {
+      const response = await fetch(`/api/upload`, {
         method: "POST",
         body: formData,
       });

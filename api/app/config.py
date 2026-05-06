@@ -5,7 +5,15 @@ All environment variables and settings for the API.
 
 from __future__ import annotations
 
+from pathlib import Path
+from dotenv import load_dotenv
 from pydantic_settings import BaseSettings
+
+# Load .env from project root (for local development)
+# In production, environment variables should be set by the platform
+env_path = Path(__file__).parent.parent.parent / ".env"
+if env_path.exists():
+    load_dotenv(dotenv_path=env_path)
 
 
 class Settings(BaseSettings):
@@ -17,9 +25,9 @@ class Settings(BaseSettings):
     api_prefix: str = "/api"
 
     # NScale Inference (Llama 3.3 70B Instruct)
-    nscale_api_key: str = ""
+    nscale_service_token: str = ""
     nscale_api_base: str = "https://inference.api.nscale.com/v1"
-    nscale_model: str = "meta-llama-3.3-70b-instruct"
+    nscale_model: str = "meta-llama/Llama-3.3-70B-Instruct"
 
     # Upstash Redis
     upstash_redis_rest_url: str = ""
@@ -30,6 +38,8 @@ class Settings(BaseSettings):
     paddle_client_token: str = ""
     paddle_webhook_secret: str = ""
     paddle_product_id: str = ""
+    paddle_api_key: str
+    paddle_sandbox: bool = True 
 
     # Voucher System
     voucher_hmac_secret: str = ""
@@ -59,11 +69,7 @@ class Settings(BaseSettings):
     max_upload_size_mb: int = 10      # Maximum file size in MB
     
     # Request Timeout (seconds)
-    request_timeout: int = 60         # Maximum request processing time
-
-    class Config:
-        env_file = ".env"
-        case_sensitive = False
+    request_timeout: int = 60         # Maximum request processing time in seconds
 
     @property
     def cors_origins(self) -> list[str]:
@@ -73,3 +79,31 @@ class Settings(BaseSettings):
 
 # Global settings instance
 settings = Settings()
+
+
+# ============================================================================
+# Application Constants
+# ============================================================================
+
+# Voucher pack types
+VALID_PACK_TYPES = ("PAYG", "Starter", "Pro", "Office")
+
+# Transaction ID prefixes
+TRANSACTION_ID_PREFIX = "txn_"
+PRICE_ID_PREFIX = "pri_"
+
+# Voucher code pattern
+VOUCHER_CODE_PREFIX = "ENZ-"
+
+# Minimum passphrase length
+MIN_PASSPHRASE_LENGTH = 8
+
+# Session expiration (seconds)
+SESSION_EXPIRATION_SECONDS = 3600  # 1 hour
+
+# Default chats per session
+DEFAULT_CHATS_PER_SESSION = 5
+
+# API Key requirements
+MIN_API_KEY_LENGTH = 32
+VALID_API_KEY_CHARS = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_")

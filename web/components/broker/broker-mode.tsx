@@ -66,7 +66,7 @@ export function BrokerMode() {
       formData.append("file", file);
 
       const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/upload/batch`,
+        `/api/upload/batch`,
         {
           method: "POST",
           body: formData,

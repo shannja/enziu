@@ -37,7 +37,7 @@ export default function RecoverPage() {
     setError(null);
 
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/voucher/recover`, {
+      const response = await fetch(`/api/voucher/recover`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

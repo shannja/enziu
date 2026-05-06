@@ -1,10 +1,10 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatCurrency, generateRandomPassphrase, copyToClipboard } from "@/lib/utils";
-import { CreditCard, Apple, Smartphone, RefreshCw, Copy, Check, AlertTriangle } from "lucide-react";
+import { CreditCard, Apple, Smartphone, RefreshCw, Copy, Check } from "lucide-react";
 
 interface PaddleCheckoutProps {
   amount: number;
@@ -15,26 +15,30 @@ interface PaddleCheckoutProps {
 declare global {
   interface Window {
     Paddle?: {
-      Environment: {
-        set: (env: "sandbox" | "production") => void;
-      };
+      Initialize: (config: {
+        token: string;
+        eventCallback?: (event: PaddleEvent) => void;
+      }) => void;
       Checkout: {
         open: (options: {
-          settings: {
-            mode: "payment";
-            allowLogout?: boolean;
-          };
-          items: Array<{ priceId: string; quantity?: number }>;
-          customer?: { email?: string };
+          transactionId?: string;
+          items?: Array<{ priceId: string; quantity?: number }>;
           customData?: Record<string, unknown>;
         }) => void;
       };
-      Events?: {
-        subscribe: (eventType: string, callback: (event: unknown) => void) => void;
+      Environment: {
+        set: (env: "sandbox" | "production") => void;
       };
-      initialize: (token: string) => void;
     };
   }
+}
+
+interface PaddleEvent {
+  name: string;
+  data?: {
+    transaction_id?: string;
+    status?: string;
+  };
 }
 
 export function PaddleCheckout({
@@ -48,35 +52,153 @@ export function PaddleCheckout({
   const [showPassphraseInfo, setShowPassphraseInfo] = useState(false);
   const [generatedVoucher, setGeneratedVoucher] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Ref so the eventCallback closure always sees the latest passphrase value
+  const passphraseRef = useRef(passphrase);
+  useEffect(() => {
+    passphraseRef.current = passphrase;
+  }, [passphrase]);
 
   useEffect(() => {
-    // Load Paddle.js
+    // Don't re-initialise if Paddle is already on the page
+    if (window.Paddle) {
+      setIsPaddleLoaded(true);
+      return;
+    }
+
     const script = document.createElement("script");
     script.src = "https://cdn.paddle.com/paddle/v2/paddle.js";
     script.async = true;
-    script.onload = () => {
-      if (window.Paddle) {
-        const clientToken = process.env.NEXT_PUBLIC_PADDLE_CLIENT_TOKEN;
-        if (!clientToken) {
-          console.error("Paddle client token not configured");
-          return;
-        }
-        window.Paddle.initialize(clientToken);
-        window.Paddle.Environment.set("sandbox");
-        setIsPaddleLoaded(true);
-      }
-    };
-    document.body.appendChild(script);
 
+    script.onload = () => {
+      if (!window.Paddle) return;
+
+      const clientToken = process.env.NEXT_PUBLIC_PADDLE_CLIENT_TOKEN;
+      if (!clientToken) {
+        console.error("Paddle client token not configured");
+        return;
+      }
+
+      // Environment MUST be set before Initialize
+      window.Paddle.Environment.set("sandbox");
+      window.Paddle.Initialize({
+        token: clientToken,
+        eventCallback: (event: PaddleEvent) => {
+          console.log("[Paddle event]", event.name, event.data);
+
+          if (event.name === "checkout.completed") {
+            handlePaymentSuccess(event.data?.transaction_id);
+          }
+          if (event.name === "checkout.closed") {
+            setIsProcessing(false);
+          }
+          if (event.name === "checkout.error") {
+            setIsProcessing(false);
+            setError("Checkout encountered an error. Please try again.");
+          }
+        },
+      });
+
+      setIsPaddleLoaded(true);
+    };
+
+    script.onerror = () => {
+      setError("Failed to load payment provider. Please refresh and try again.");
+    };
+
+    document.body.appendChild(script);
     return () => {
-      document.body.removeChild(script);
+      if (document.body.contains(script)) document.body.removeChild(script);
     };
   }, []);
 
+  // Called by the Paddle eventCallback when checkout.completed fires
+  const handlePaymentSuccess = async (txnId?: string) => {
+    setIsProcessing(true);
+    setError(null);
+
+    try {
+      // Verify payment server-side and receive generated voucher
+      const res = await fetch("/api/paddle/verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          transaction_id: txnId,
+          session_id: sessionId,
+          passphrase: passphraseRef.current,
+        }),
+      });
+
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || "Payment verification failed");
+      }
+
+      const { voucher_code } = await res.json();
+      setGeneratedVoucher(voucher_code);
+      onPaymentComplete(voucher_code);
+    } catch (err) {
+      console.error("Payment verification error:", err);
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Verification failed. Please contact support."
+      );
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleCheckout = async () => {
+    if (!window.Paddle) return;
+    if (!passphrase || passphrase.length < 8) {
+      setError("Please generate or enter a passphrase (minimum 8 characters)");
+      return;
+    }
+
+    setIsProcessing(true);
+    setError(null);
+
+    try {
+      // Create a server-side transaction first.
+      // This is what fixes the 400 — passing items[] directly to Checkout.open()
+      // hits the /paddlejs endpoint which is stricter about price ID validation.
+      const res = await fetch("/api/paddle/transaction", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          session_id: sessionId,
+          price_id: process.env.NEXT_PUBLIC_PADDLE_PRICE_ID_PAYG,
+        }),
+      });
+
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || "Failed to initialise checkout");
+      }
+
+      const { transaction_id } = await res.json();
+
+      // Open checkout with the transaction ID — far more reliable than items[]
+      window.Paddle.Checkout.open({ transactionId: transaction_id });
+
+      // isProcessing stays true until checkout.completed or checkout.closed fires
+    } catch (err) {
+      console.error("Checkout error:", err);
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Could not open checkout. Please try again."
+      );
+      setIsProcessing(false);
+    }
+  };
+
   const handleGeneratePassphrase = () => {
-    const newPassphrase = generateRandomPassphrase();
-    setPassphrase(newPassphrase);
+    setPassphrase(generateRandomPassphrase());
     setShowPassphraseInfo(true);
+    setError(null);
   };
 
   const handleCopyPassphrase = async () => {
@@ -89,81 +211,7 @@ export function PaddleCheckout({
     }
   };
 
-  const handleCheckout = () => {
-    if (!window.Paddle) return;
-    if (!passphrase || passphrase.length < 8) {
-      alert("Please generate or enter a passphrase (minimum 8 characters)");
-      return;
-    }
-
-    setIsProcessing(true);
-
-    // Get price ID from environment
-    const priceId = process.env.NEXT_PUBLIC_PADDLE_PRICE_ID_PAYG || "pri_0123456789";
-    
-    window.Paddle.Checkout.open({
-      settings: {
-        mode: "payment",
-        allowLogout: true,
-      },
-      items: [
-        {
-          priceId: priceId,
-          quantity: 1,
-        },
-      ],
-      customData: {
-        session_id: sessionId,
-        pack_type: "PAYG",
-      },
-    });
-
-    // Subscribe to checkout completion
-    if (window.Paddle.Events) {
-      window.Paddle.Events.subscribe("checkout.completed", async (event: unknown) => {
-        try {
-          // Call backend to generate voucher
-          const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/voucher/generate`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              pack_type: "PAYG",
-              passphrase: passphrase,
-            }),
-          });
-
-          if (!response.ok) {
-            throw new Error("Failed to generate voucher");
-          }
-
-          const result = await response.json();
-          setGeneratedVoucher(result.code);
-          setIsProcessing(false);
-          
-          // Notify parent component
-          onPaymentComplete(result.code);
-        } catch (error) {
-          console.error("Error generating voucher:", error);
-          setIsProcessing(false);
-          alert("Payment successful but voucher generation failed. Please contact support.");
-        }
-      });
-    }
-
-    // Fallback: simulate completion for demo if event doesn't fire
-    setTimeout(() => {
-      if (isProcessing) {
-        setIsProcessing(false);
-        // For demo purposes, generate a mock voucher
-        const mockVoucher = `ENZ-${Math.random().toString(36).substring(2, 6).toUpperCase()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
-        setGeneratedVoucher(mockVoucher);
-        onPaymentComplete(mockVoucher);
-      }
-    }, 5000);
-  };
-
+  // ── Success screen ────────────────────────────────────────────────────────
   if (generatedVoucher) {
     return (
       <Card className="max-w-md mx-auto border-brand-amber/30 bg-green-900/20">
@@ -176,36 +224,28 @@ export function PaddleCheckout({
         <CardContent className="space-y-6">
           <div className="text-center">
             <p className="text-sm text-muted-foreground mb-2">Your voucher code:</p>
-            <div className="text-2xl font-bold text-brand-amber font-mono bg-black/30 p-3 rounded-lg">
+            <div className="text-2xl font-bold text-gradient font-mono bg-black/30 p-3 rounded-lg">
               {generatedVoucher}
             </div>
           </div>
 
-          <div className="flex gap-2">
-            <Button
-              onClick={async () => {
-                const success = await copyToClipboard(generatedVoucher);
-                if (success) {
-                  setCopied(true);
-                  setTimeout(() => setCopied(false), 2000);
-                }
-              }}
-              variant="outline"
-              className="flex-1"
-            >
-              {copied ? (
-                <>
-                  <Check className="w-4 h-4 mr-2" />
-                  Copied!
-                </>
-              ) : (
-                <>
-                  <Copy className="w-4 h-4 mr-2" />
-                  Copy Code
-                </>
-              )}
-            </Button>
-          </div>
+          <Button
+            onClick={async () => {
+              const success = await copyToClipboard(generatedVoucher);
+              if (success) {
+                setCopied(true);
+                setTimeout(() => setCopied(false), 2000);
+              }
+            }}
+            variant="outline"
+            className="w-full"
+          >
+            {copied ? (
+              <><Check className="w-4 h-4 mr-2" />Copied!</>
+            ) : (
+              <><Copy className="w-4 h-4 mr-2" />Copy Code</>
+            )}
+          </Button>
 
           <div className="bg-secondary/50 rounded-lg p-3 text-xs text-muted-foreground">
             <p className="font-medium text-white mb-1">⚠️ Important:</p>
@@ -213,66 +253,58 @@ export function PaddleCheckout({
               <li>• Save this voucher code safely</li>
               <li>• Your passphrase: <strong>{passphrase}</strong></li>
               <li>• You'll need both to recover if lost</li>
-              <li>• No email is stored - this is your only backup</li>
+              <li>• No email is stored — this is your only backup</li>
             </ul>
           </div>
 
           <div className="text-center text-xs text-muted-foreground">
-            <p>Full analysis unlocked! Redirecting...</p>
+            Full analysis unlocked! Redirecting...
           </div>
         </CardContent>
       </Card>
     );
   }
 
+  // ── Checkout form ─────────────────────────────────────────────────────────
   return (
     <Card className="max-w-md mx-auto border-brand-amber/30">
       <CardHeader className="text-center">
-        <CardTitle className="text-xl text-white">
-          Unlock Full Analysis
-        </CardTitle>
+        <CardTitle className="text-xl text-foreground">Unlock Full Analysis</CardTitle>
       </CardHeader>
       <CardContent className="space-y-6">
         <div className="text-center">
-          <div className="text-3xl font-bold text-brand-amber">
-            {formatCurrency(amount)}
-          </div>
+          <div className="text-3xl font-bold text-gradient">{formatCurrency(amount)}</div>
           <p className="text-sm text-muted-foreground mt-1">
             One-time payment • No account required
           </p>
         </div>
 
-        {/* Passphrase Section */}
+        {/* Passphrase */}
         <div className="space-y-3">
           <div className="flex items-center justify-between">
-            <label className="text-sm font-medium text-white">
+            <label className="text-sm font-medium text-foreground">
               Recovery Passphrase *
             </label>
             <button
               type="button"
               onClick={() => setShowPassphraseInfo(!showPassphraseInfo)}
-              className="text-xs text-brand-amber hover:underline"
+              className="text-xs text-gradient hover:underline"
             >
               What's this?
             </button>
           </div>
 
           {showPassphraseInfo && (
-            <div className="bg-blue-900/30 border border-blue-700/50 rounded-lg p-3 text-xs space-y-2">
-              <div className="flex items-start gap-2">
-                <AlertTriangle className="w-4 h-4 text-blue-400 mt-0.5 flex-shrink-0" />
-                <div>
-                  <p className="text-blue-200 mb-1">
-                    <strong>Why you need a passphrase:</strong>
-                  </p>
-                  <ul className="text-blue-100/80 space-y-1">
-                    <li>• No email required - complete privacy</li>
-                    <li>• Use this to recover your voucher if lost</li>
-                    <li>• Choose something memorable but secure</li>
-                    <li>• Minimum 8 characters</li>
-                  </ul>
-                </div>
-              </div>
+            <div className="bg-gradient-900/30 border rounded-lg p-3 text-xs space-y-2">
+              <p className="text-foreground mb-1 text-left text-gradient">
+                <strong>Why you need a passphrase?</strong>
+              </p>
+              <ul className="text-foreground space-y-1 list-none pl-0 text-left">
+                <li>No email required — complete privacy</li>
+                <li>Use this to recover your voucher if lost</li>
+                <li>Choose something memorable but secure</li>
+                <li>Minimum 8 characters</li>
+              </ul>
             </div>
           )}
 
@@ -280,14 +312,14 @@ export function PaddleCheckout({
             <input
               type="text"
               value={passphrase}
-              onChange={(e) => setPassphrase(e.target.value)}
+              onChange={(e) => { setPassphrase(e.target.value); setError(null); }}
               placeholder="Enter or generate passphrase..."
-              className="flex-1 px-3 py-2 bg-secondary border border-border rounded-md text-white text-sm focus:outline-none focus:ring-2 focus:ring-brand-amber/50"
+              className="flex-1 px-3 py-2 bg-secondary border border-border rounded-md text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-brand-amber/50"
             />
             <Button
               type="button"
               onClick={handleGeneratePassphrase}
-              variant="outline"
+              variant="gradient-bg"
               size="sm"
               className="flex-shrink-0"
             >
@@ -307,19 +339,9 @@ export function PaddleCheckout({
               <button
                 type="button"
                 onClick={handleCopyPassphrase}
-                className="text-xs text-brand-amber hover:underline flex items-center gap-1"
+                className="text-xs text-gradient hover:underline flex items-center gap-1"
               >
-                {copied ? (
-                  <>
-                    <Check className="w-3 h-3" />
-                    Copied!
-                  </>
-                ) : (
-                  <>
-                    <Copy className="w-3 h-3" />
-                    Copy
-                  </>
-                )}
+                {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
               </button>
             </div>
           )}
@@ -328,6 +350,13 @@ export function PaddleCheckout({
             ⚠️ Save this passphrase! It's your only way to recover your voucher.
           </p>
         </div>
+
+        {/* Error */}
+        {error && (
+          <div className="bg-red-900/20 border border-red-500/30 rounded-lg p-3 text-xs text-red-400">
+            {error}
+          </div>
+        )}
 
         <Button
           onClick={handleCheckout}
@@ -339,7 +368,7 @@ export function PaddleCheckout({
           {isProcessing ? (
             <span className="flex items-center gap-2">
               <span className="w-4 h-4 border-2 border-black border-t-transparent rounded-full animate-spin" />
-              Processing...
+              Opening checkout...
             </span>
           ) : (
             "Pay & Get Full Report"
@@ -357,12 +386,13 @@ export function PaddleCheckout({
         </p>
 
         <div className="bg-secondary/50 rounded-lg p-3 text-xs text-muted-foreground">
-          <p className="font-medium text-white mb-1">What you'll get:</p>
-          <ul className="space-y-1">
-            <li>• Full ENZIU Index with page citations</li>
-            <li>• All red flags with exact locations</li>
-            <li>• Plain-English summary</li>
-            <li>• 5 Deep Dive chat questions</li>
+          <p className="font-medium text-gradient mb-1 text-left"><strong>Here's what you'll get!</strong></p>
+          <br />
+          <ul className="space-y-1 list-none pl-0 text-left">
+            <li>Full ENZIU Index with page citations</li>
+            <li>All red flags with exact locations</li>
+            <li>Plain-English summary</li>
+            <li>5 Deep Dive chat questions</li>
           </ul>
         </div>
       </CardContent>

@@ -44,7 +44,7 @@ export function DeepDiveChat({ sessionId, onChatComplete }: DeepDiveChatProps) {
     setChatsRemaining((prev) => prev - 1);
 
     try {
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/chat`, {
+      const response = await fetch(`/api/chat`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
