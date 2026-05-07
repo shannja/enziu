@@ -12,7 +12,7 @@ import logging
 from typing import Any, List, Dict, Optional
 
 from ..config import settings
-from ..prompts import MAP_CHUNK_PROMPT, REDUCE_FACTSHEET_PROMPT
+from ..prompts import MAP_CHUNK_PROMPT, REDUCE_FACTSHEET_PROMPT, SNEAK_PEEK_CHUNK_PROMPT
 from .inference import InferenceClient, _sanitize_injected_text
 
 logger = logging.getLogger("policy_auditor")
@@ -188,8 +188,8 @@ class PolicyAuditor:
                 prompt=prompt,
                 system_prompt="You are an insurance policy auditor extracting facts from a document chunk.",
                 max_tokens=2000,
-                timeout=55.0,  # Serverless-safe timeout
-                max_retries=1,
+                timeout=120.0,  # Longer timeout for Llama 70B with 60k char chunks
+                max_retries=2,  # Total 3 attempts (initial + 2 retries)
             )
             
             # Parse JSON response using robust parser
@@ -317,10 +317,147 @@ class PolicyAuditor:
         
         return fact_sheet
 
+    # ── Sneak Peek Chunk Processor ─────────────────────────────────────────
+    SPEAK_PEEK_CHUNK_SIZE = 20000  # Minimal chunks for Qwen 14B reliability
+
+    async def _process_sneak_peek_chunk(self, chunk: str, chunk_index: int) -> Dict[str, Any]:
+        """Process a single chunk with the sneak peek model (Map phase)."""
+        logger.info(f"SneakPeek chunk {chunk_index} ({len(chunk)} chars)")
+        
+        try:
+            safe_chunk = _sanitize_injected_text(chunk, f"sneak_peek_chunk_{chunk_index}")
+            prompt = f"{SNEAK_PEEK_CHUNK_PROMPT}\n\n<document>\n{safe_chunk}\n</document>\n\nAnalysis:"
+            
+            raw = await self.sneak_peek_client._complete(
+                prompt=prompt,
+                system_prompt="You are ENZIU, an AI insurance policy auditor. Return ONLY valid JSON. No preamble. No markdown.",
+                max_tokens=800,
+                timeout=55.0,
+                max_retries=2,
+            )
+            
+            analysis = _safe_parse_json(raw, log_prefix=f"SneakPeekChunk{chunk_index}")
+            logger.debug(f"SneakPeek chunk {chunk_index} analysis: {analysis.get('score_band', '?')}")
+            return analysis
+            
+        except Exception as e:
+            logger.error(f"SneakPeek chunk {chunk_index} error: {e}", exc_info=True)
+            return {
+                "score_band": "C", "score_preview": "low",
+                "clarity_grade": "C", "coverage_grade": "C", "claims_efficiency_grade": "C",
+                "top_risk": None, "red_flag_names": [],
+                "one_line": "Chunk analysis unavailable", "policy_type": "other", "carrier_name": None,
+            }
+
+    async def _reduce_sneak_peek_chunks(self, chunk_results: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        Merge sneak peek results from all chunks.
+        Weighted average for grades, collect all red flags, pick worst top_risk.
+        No LLM call — this is a programmatic merge.
+        """
+        if not chunk_results:
+            return self._default_sneak_peek()
+
+        # Grade band → numeric mapping for averaging
+        grade_to_num = {
+            "A+": 97, "A": 92, "A-": 88,
+            "B+": 82, "B": 78, "B-": 72,
+            "C+": 68, "C": 62, "C-": 58,
+            "D+": 52, "D": 48, "D-": 42, "F": 20,
+        }
+        num_to_grade_band = [
+            (95, "A+"), (85, "A"), (77, "B+"), (72, "B"),
+            (67, "C+"), (62, "C"), (55, "D"), (0, "F"),
+        ]
+
+        def avg_grade(key: str) -> str:
+            grades = [r.get(key, "C") for r in chunk_results]
+            nums = [grade_to_num.get(g, 62) for g in grades]
+            avg = sum(nums) / len(nums)
+            return next(band for threshold, band in num_to_grade_band if avg >= threshold)
+
+        # Collect all red flags, deduplicate by name
+        all_flags: List[str] = []
+        seen = set()
+        for r in chunk_results:
+            for flag in r.get("red_flag_names", []):
+                if flag and flag not in seen and flag != "<name only>":
+                    seen.add(flag)
+                    all_flags.append(flag)
+
+        # Pick the worst top_risk (non-null)
+        top_risks = [r.get("top_risk") for r in chunk_results if r.get("top_risk") and r.get("top_risk") != "null"]
+        top_risk = top_risks[0] if top_risks else "Analysis in progress"
+
+        # Pick most common policy_type
+        types = [r.get("policy_type", "other") for r in chunk_results if r.get("policy_type") != "other"]
+        policy_type = max(set(types), key=types.count) if types else "other"
+
+        # Pick first non-null carrier
+        carriers = [r.get("carrier_name") for r in chunk_results if r.get("carrier_name")]
+        carrier_name = carriers[0] if carriers else None
+
+        overall = avg_grade("score_band")
+        score_preview = (
+            "high" if overall in ("A+", "A", "A-")
+            else "medium" if overall in ("B+", "B", "B-", "C+")
+            else "low"
+        )
+
+        logger.info(
+            f"SneakPeek reduce: chunks={len(chunk_results)}, "
+            f"overall={overall}, flags={len(all_flags)}, "
+            f"clarity={avg_grade('clarity_grade')}, "
+            f"coverage={avg_grade('coverage_grade')}, "
+            f"claims={avg_grade('claims_efficiency_grade')}"
+        )
+
+        return self._format_sneak_peek_response({
+            "score_band": overall,
+            "score_preview": score_preview,
+            "clarity_grade": avg_grade("clarity_grade"),
+            "coverage_grade": avg_grade("coverage_grade"),
+            "claims_efficiency_grade": avg_grade("claims_efficiency_grade"),
+            "top_risk": top_risk,
+            "red_flag_names": all_flags[:3],
+            "one_line": f"Policy graded {overall} with {len(all_flags)} red flags detected.",
+            "policy_type": policy_type,
+            "carrier_name": carrier_name,
+        })
+
+    def _format_sneak_peek_response(self, analysis: Dict[str, Any]) -> Dict[str, Any]:
+        """Format raw analysis dict into the standard sneak peek response."""
+        return {
+            "grade": {
+                "overall": analysis.get("score_band", "C"),
+                "clarity": analysis.get("clarity_grade", "C"),
+                "coverage": analysis.get("coverage_grade", "C"),
+                "claimsEfficiency": analysis.get("claims_efficiency_grade", "C"),
+            },
+            "topRisk": analysis.get("top_risk", "Analysis in progress"),
+            "redFlags": analysis.get("red_flag_names", ["Analysis in progress"])[:3],
+            "summary": analysis.get("one_line", "Full analysis available after payment."),
+            "score_preview": analysis.get("score_preview", "medium"),
+            "policy_type": analysis.get("policy_type", "other"),
+            "carrier_name": analysis.get("carrier_name"),
+        }
+
+    def _default_sneak_peek(self) -> Dict[str, Any]:
+        """Return a default/fallback sneak peek result."""
+        return {
+            "grade": {"overall": "C", "clarity": "C", "coverage": "C", "claimsEfficiency": "C"},
+            "topRisk": "Unable to analyze at this time",
+            "redFlags": ["Analysis in progress"],
+            "summary": "Full analysis available after payment.",
+            "score_preview": "medium",
+            "policy_type": "other",
+            "carrier_name": None,
+        }
+
     async def analyze_sneak_peek(self, text: str, session_id: str) -> Dict[str, Any]:
         """
         Generate a free sneak peek using the cheaper model.
-        Processes the FULL document (not just first chunk).
+        Uses single-shot for small policies, parallel Map-Reduce for large ones.
         
         Args:
             text: Full policy text
@@ -333,12 +470,32 @@ class PolicyAuditor:
         
         logger.info(f"analyze_sneak_peek() - session={session_id}, chars={len(text)}")
         
+        # For small policies (≤40k chars), use single-shot for speed
+        if len(text) <= self.SPEAK_PEEK_CHUNK_SIZE:
+            return await self._analyze_sneak_peek_single(text, session_id)
+        
+        # For large policies, use parallel chunking
+        logger.info(f"Policy text too large ({len(text)} chars) — using parallel Map-Reduce for sneak peek")
         try:
-            # Sanitize and wrap in <document> tags for injection protection
+            chunks = self.chunk_text(text, chunk_size=self.SPEAK_PEEK_CHUNK_SIZE, overlap=2000)
+            logger.info(f"Splitting sneak peek into {len(chunks)} chunk(s)")
+            
+            chunk_tasks = [self._process_sneak_peek_chunk(chunk, i) for i, chunk in enumerate(chunks)]
+            chunk_results = await asyncio.gather(*chunk_tasks)
+            
+            return await self._reduce_sneak_peek_chunks(chunk_results)
+        except Exception as e:
+            logger.error(f"Sneak peek parallel failed, falling back to single-shot: {e}", exc_info=True)
+            return await self._analyze_sneak_peek_single(text[:self.SPEAK_PEEK_CHUNK_SIZE], session_id)
+
+    async def _analyze_sneak_peek_single(self, text: str, session_id: str) -> Dict[str, Any]:
+        """Single-shot sneak peek analysis for small policies."""
+        from ..prompts import SNEAK_PEEK_PROMPT
+        
+        try:
             safe_text = _sanitize_injected_text(text, "sneak_peek_pdf")
             prompt = f"{SNEAK_PEEK_PROMPT}\n\n<document>\n{safe_text}\n</document>\n\nAnalysis:"
             
-            # Call sneak peek model (Qwen 14B)
             raw = await self.sneak_peek_client._complete(
                 prompt=prompt,
                 system_prompt="You are ENZIU, an AI insurance policy auditor. Return ONLY valid JSON. No preamble. No markdown.",
@@ -347,37 +504,13 @@ class PolicyAuditor:
                 max_retries=2,
             )
             
-            # Parse JSON response using robust parser
             analysis = _safe_parse_json(raw, log_prefix="SneakPeek")
-            
-            # Format response
             logger.debug(f"SneakPeek analysis keys: {list(analysis.keys())}")
-            return {
-                "grade": {
-                    "overall": analysis.get("score_band", "C"),
-                    "clarity": analysis.get("clarity_grade", "C"),
-                    "coverage": analysis.get("coverage_grade", "C"),
-                    "claimsEfficiency": analysis.get("claims_efficiency_grade", "C"),
-                },
-                "topRisk": analysis.get("top_risk", "Analysis in progress"),
-                "redFlags": analysis.get("red_flag_names", ["Analysis in progress"])[:3],
-                "summary": analysis.get("one_line", "Full analysis available after payment."),
-                "score_preview": analysis.get("score_preview", "medium"),
-                "policy_type": analysis.get("policy_type", "other"),
-                "carrier_name": analysis.get("carrier_name"),
-            }
+            return self._format_sneak_peek_response(analysis)
             
         except Exception as e:
             logger.error(f"Sneak peek error: {e}", exc_info=True)
-            return {
-                "grade": {"overall": "C", "clarity": "C", "coverage": "C", "claimsEfficiency": "C"},
-                "topRisk": "Unable to analyze at this time",
-                "redFlags": ["Analysis in progress"],
-                "summary": "Full analysis available after payment.",
-                "score_preview": "medium",
-                "policy_type": "other",
-                "carrier_name": None,
-            }
+            return self._default_sneak_peek()
 
     async def chat(
         self, session_id: str, message: str, fact_sheet: Dict[str, Any],

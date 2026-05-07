@@ -88,12 +88,14 @@ export function DeepDiveChat({ sessionId, onChatComplete }: DeepDiveChatProps) {
         role: "assistant",
         content: data.response,
         page: data.page,
-        disclaimer: data.disclaimer || "This is not legal advice. Please consult your broker for details.",
+        disclaimer: data.disclaimer || "Not legal advice — page citations are approximate",
       };
 
-      // Store excerpt for potential PDF viewer navigation
-      if (data.excerpt) {
-        sessionStorage.setItem("enziu_last_excerpt", data.excerpt);
+      // Dispatch highlight event to PDF viewer
+      if (data.page && data.excerpt) {
+        window.dispatchEvent(new CustomEvent("enziu-highlight", {
+          detail: { page: data.page, excerpt: data.excerpt }
+        }));
       }
 
       setMessages((prev) => [...prev, assistantMessage]);
@@ -102,7 +104,7 @@ export function DeepDiveChat({ sessionId, onChatComplete }: DeepDiveChatProps) {
       const errorMessage: ChatMessage = {
         role: "assistant",
         content: "Sorry, I couldn't process that question. Please try again.",
-        disclaimer: "This is not legal advice. Please consult your broker for details.",
+        disclaimer: "Not legal advice — page citations are approximate",
       };
       setMessages((prev) => [...prev, errorMessage]);
     } finally {

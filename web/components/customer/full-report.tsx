@@ -27,9 +27,23 @@ export function FullReport({ result, pdfData: propPdfData, isGenerating = false,
 
   const { grade, detailedFlags, clauses, summary } = result;
   const [selectedPage, setSelectedPage] = useState<number | undefined>(undefined);
+  const [highlightExcerpt, setHighlightExcerpt] = useState<string | undefined>(undefined);
+  const [highlightPage, setHighlightPage] = useState<number | undefined>(undefined);
   const [showPdfViewer, setShowPdfViewer] = useState(false);
   const [pdfData, setPdfData] = useState<string | undefined>(propPdfData);
   const [isLoadingPdf, setIsLoadingPdf] = useState(false);
+
+  // Listen for highlight events from Deep Dive chat
+  useEffect(() => {
+    const handleHighlight = (event: CustomEvent<{ page: number; excerpt: string }>) => {
+      setHighlightPage(event.detail.page);
+      setHighlightExcerpt(event.detail.excerpt);
+      setSelectedPage(event.detail.page);
+      setShowPdfViewer(true);
+    };
+    window.addEventListener("enziu-highlight", handleHighlight as EventListener);
+    return () => window.removeEventListener("enziu-highlight", handleHighlight as EventListener);
+  }, []);
 
   // Retrieve PDF from IndexedDB on mount
   useEffect(() => {
@@ -43,15 +57,6 @@ export function FullReport({ result, pdfData: propPdfData, isGenerating = false,
       // Try to load from IndexedDB using session ID
       setIsLoadingPdf(true);
       try {
-        // First try localStorage fallback
-        const storedPdf = localStorage.getItem("enziu_pdf");
-        if (storedPdf) {
-          setPdfData(storedPdf);
-          setShowPdfViewer(true);
-          setIsLoadingPdf(false);
-          return;
-        }
-
         // Try IndexedDB with session ID (preferred)
         const sessionToUse = sessionId || localStorage.getItem("recent_session");
         if (sessionToUse) {
@@ -81,7 +86,7 @@ export function FullReport({ result, pdfData: propPdfData, isGenerating = false,
     <div className="space-y-8">
       {/* PDF Viewer Toggle — always visible so user can show/hide */}
       <div className="flex items-center justify-between">
-        <div className="text-center mb-8 flex-1">
+        <div className="text-left mb-8 flex-1">
           <h2 className="text-2xl font-bold text-foreground mb-2">
             Your Full ENZIU Report
           </h2>
@@ -122,7 +127,8 @@ export function FullReport({ result, pdfData: propPdfData, isGenerating = false,
           <div className="lg:sticky lg:top-24 lg:self-start lg:h-[calc(100vh-8rem)]">
             <PDFViewer
               pdfData={pdfData}
-              currentPage={selectedPage}
+              currentPage={highlightPage || selectedPage}
+              highlightExcerpt={highlightExcerpt}
               onPageChange={setSelectedPage}
             />
           </div>
@@ -134,7 +140,7 @@ export function FullReport({ result, pdfData: propPdfData, isGenerating = false,
           {/* ENZIU Index Scores */}
           <Card className="border-border bg-card/50">
         <CardHeader>
-          <CardTitle className="text-lg text-gradient flex items-center gap-2">
+          <CardTitle className="text-lg text-gradient flex items-left gap-2">
             ENZIU Index Scores
           </CardTitle>
         </CardHeader>

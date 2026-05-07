@@ -22,3 +22,6 @@ COMPARE_PROMPT = load_prompt("broker_compare.md")
 # Map-Reduce Policy Auditor prompts
 MAP_CHUNK_PROMPT = load_prompt("map_chunk.md")
 REDUCE_FACTSHEET_PROMPT = load_prompt("reduce_factsheet.md")
+
+# Sneak peek Map-Reduce (lightweight)
+SNEAK_PEEK_CHUNK_PROMPT = load_prompt("sneak_peek_chunk.md")

@@ -127,6 +127,7 @@ class InferenceClient:
 
             try:
                 logger.info(f"Inference request (attempt {attempt + 1}/{max_retries}) - model={self.model}, timeout={timeout}s")
+                logger.debug(f"LLM prompt ({len(prompt)} chars, first 500): {prompt[:500]}")
                 async with httpx.AsyncClient(timeout=timeout) as client:
                     response = await client.post(
                         f"{self.api_base}/chat/completions",
@@ -139,10 +140,10 @@ class InferenceClient:
                     if "choices" in data and data["choices"]:
                         content = data["choices"][0]["message"]["content"]
                         if content is None:
-                            raise Exception("Inference API returned null content in response")
+                            raise Exception("Model returned null content — will retry")
                         logger.info(f"Response received - {len(content)} chars")
                         return content
-                    raise Exception(f"Unexpected response format: {list(data.keys())}")
+                    raise Exception(f"Malformed response from model — will retry: {list(data.keys())}")
 
                 error_text = response.text[:500] if response.text else "No response body"
                 logger.error(f"Inference API error: {response.status_code} - {error_text}")

@@ -73,7 +73,7 @@ export function SneakPeekBento({ result }: SneakPeekBentoProps) {
         variants={containerVariants}
         initial="hidden"
         animate="visible"
-        className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 max-w-4xl mx-auto"
+        className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 max-w-4xl mx-auto"
       >
         {/* Grade Card */}
         <motion.div variants={itemVariants}>
@@ -93,9 +93,9 @@ export function SneakPeekBento({ result }: SneakPeekBentoProps) {
                 {grade.overall}
               </div>
               <div className="mt-2 text-sm text-muted-foreground">
-                Clarity: <span className={getGradeColor(grade.clarity)}>{grade.clarity}</span> • 
-                Coverage: <span className={getGradeColor(grade.coverage)}>{grade.coverage}</span> • 
-                Claims: <span className={getGradeColor(grade.claimsEfficiency)}>{grade.claimsEfficiency}</span>
+                Clarity <span className={getGradeColor(grade.clarity)}>{grade.clarity}</span> • 
+                Coverage <span className={getGradeColor(grade.coverage)}>{grade.coverage}</span> • 
+                Claims <span className={getGradeColor(grade.claimsEfficiency)}>{grade.claimsEfficiency}</span>
               </div>
             </CardContent>
           </Card>

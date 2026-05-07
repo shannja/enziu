@@ -8,7 +8,7 @@ import { FullReport } from "./full-report";
 import { DeepDiveChat } from "./deep-dive-chat";
 import { motion, AnimatePresence } from "framer-motion";
 import type { AnalysisResult } from "@/types";
-import { storePDF, storeText, getText, getFactSheet, storeFactSheet, deleteSession, cleanupExpiredSessions } from "@/lib/pdf-storage";
+import { storePDF, storeText, getText, getFactSheet, storeFactSheet, deleteSession, cleanupExpiredSessions, cleanupOrphanedSessions } from "@/lib/pdf-storage";
 
 type CustomerStep =
   | "idle"
@@ -39,6 +39,7 @@ export function CustomerMode() {
   // Clean up stale IndexedDB records on mount
   useEffect(() => {
     cleanupExpiredSessions();
+    cleanupOrphanedSessions("pending_");
   }, []);
 
   const handleFileUploaded = async (file: File) => {
@@ -68,9 +69,10 @@ export function CustomerMode() {
       // Store session ID in localStorage for PDF viewer recovery
       localStorage.setItem("recent_session", result.session_id);
       
-      // Gold-Handoff: Store PDF in IndexedDB for viewer
+      // Gold-Handoff: Store PDF in IndexedDB for viewer, clean up pending record
       try {
         await storePDF(result.session_id, file);
+        await deleteSession(`pending_${file.name}`); // Clean orphaned pending record
       } catch (err) {
         console.error('[CustomerMode] Failed to store PDF:', err);
       }
@@ -88,6 +90,8 @@ export function CustomerMode() {
     } catch (error) {
       console.error("Upload error:", error);
       const message = error instanceof Error ? error.message : "Upload failed";
+      // Clean up any orphaned data on error
+      deleteSession(`pending_${file.name}`).catch(() => {});
       // Show error in UI - scanned doc message comes from server
       setReportError(message);
       setStep("idle");
@@ -234,6 +238,12 @@ export function CustomerMode() {
     } catch (error) {
       console.error("Full analysis error:", error);
       
+      // Clean up stale session data on failure
+      if (sessionId) {
+        deleteSession(sessionId).catch(console.error);
+        sessionStorage.removeItem("enziu_vault");
+      }
+      
       let errorMessage = "Failed to generate analysis";
       if (error instanceof Error) {
         if (error.name === 'AbortError' || error.message.includes('aborted')) {
@@ -257,9 +267,7 @@ export function CustomerMode() {
     // Clean up localStorage keys
     localStorage.removeItem("recent_session");
     localStorage.removeItem("enziu_payment");
-    localStorage.removeItem("enziu_pdf");
     sessionStorage.removeItem("enziu_vault");
-    sessionStorage.removeItem("enziu_last_excerpt");
     
     setStep("idle");
     setAnalysisResult(null);
@@ -282,7 +290,7 @@ export function CustomerMode() {
     setStep("chat");
   };
 
-  const shouldHideToggle = ["sneak-peek", "paid", "full-report", "chat"].includes(step);
+  const shouldHideToggle = ["uploading", "analyzing", "sneak-peek", "paid", "full-report", "chat"].includes(step);
 
   useEffect(() => {
     if (shouldHideToggle) {
@@ -328,9 +336,9 @@ export function CustomerMode() {
           <motion.div
             key="uploading"
             {...fadeInUp}
-            className="text-center py-16"
+            className="min-h-[70vh] flex flex-col items-center justify-center"
           >
-            <div className="inline-flex flex-col items-center gap-4">
+            <div className="flex flex-col items-center gap-4">
               <div className="w-16 h-16 border-4 border-brand-amber border-t-transparent rounded-full animate-spin" />
               <p className="text-lg text-muted-foreground">Extracting text from your PDF...</p>
             </div>
@@ -341,9 +349,9 @@ export function CustomerMode() {
           <motion.div
             key="analyzing"
             {...fadeInUp}
-            className="text-center py-16"
+            className="min-h-[70vh] flex flex-col items-center justify-center"
           >
-            <div className="inline-flex flex-col items-center gap-4">
+            <div className="flex flex-col items-center gap-4">
               <div className="w-16 h-16 border-4 border-brand-amber border-t-transparent rounded-full animate-spin" />
               <p className="text-lg text-muted-foreground">Analyzing your policy...</p>
             </div>
@@ -371,9 +379,9 @@ export function CustomerMode() {
           <motion.div
             key="paid"
             {...fadeInUp}
-            className="text-center py-16"
+            className="min-h-[70vh] flex flex-col items-center justify-center"
           >
-            <div className="inline-flex flex-col items-center gap-4">
+            <div className="flex flex-col items-center gap-4">
               <div className="w-16 h-16 border-4 border-brand-amber border-t-transparent rounded-full animate-spin" />
               <p className="text-lg text-muted-foreground">Generating your full report...</p>
               {reportError && (

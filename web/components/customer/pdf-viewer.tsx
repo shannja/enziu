@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 interface PDFViewerProps {
   pdfData?: string;
   currentPage?: number;
+  highlightExcerpt?: string;
   onPageChange?: (page: number) => void;
 }
 
@@ -27,6 +28,7 @@ interface PDFDocument {
 interface PDFPage {
   getViewport: (options: { scale: number }) => PDFViewport;
   render: (ctx: RenderContext) => RenderTask;
+  getTextContent: () => Promise<{ items: Array<{ str: string; transform: number[]; width: number; height: number }> }>;
 }
 interface PDFViewport { width: number; height: number; }
 interface RenderContext { canvasContext: CanvasRenderingContext2D; viewport: PDFViewport; }
@@ -35,7 +37,7 @@ interface RenderTask { promise: Promise<void>; }
 const PDFJS_VERSION = "3.11.174";
 const PDFJS_CDN = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${PDFJS_VERSION}`;
 
-export function PDFViewer({ pdfData, currentPage: externalPage, onPageChange }: PDFViewerProps) {
+export function PDFViewer({ pdfData, currentPage: externalPage, highlightExcerpt, onPageChange }: PDFViewerProps) {
   const [libReady, setLibReady] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -45,6 +47,7 @@ export function PDFViewer({ pdfData, currentPage: externalPage, onPageChange }: 
   const [isFullscreen, setIsFullscreen] = useState(false);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
   // scrollRef wraps the canvas — its width is the stable reference for fitScale
   const scrollRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -83,9 +86,17 @@ export function PDFViewer({ pdfData, currentPage: externalPage, onPageChange }: 
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    // Measure the scroll wrapper (not the canvas) to get a stable container width.
+    // Measure the scroll wrapper to get a stable container width.
     // p-4 on both sides = 32px subtracted so the page doesn't cause a horizontal scrollbar at 100%.
-    const containerWidth = (scrollRef.current?.clientWidth ?? 800) - 32;
+    let containerWidth = (scrollRef.current?.clientWidth ?? 0) - 32;
+    
+    // First-page retry: if container hasn't laid out yet, wait 50ms and try once more
+    if (containerWidth <= 0) {
+      await new Promise(r => setTimeout(r, 50));
+      containerWidth = (scrollRef.current?.clientWidth ?? 800) - 32;
+    }
+    if (containerWidth <= 0) containerWidth = 800 - 32; // fallback
+
     const baseViewport = page.getViewport({ scale: 1 });
     const fitScale = containerWidth / baseViewport.width; // fills width at userScale=1.0
     const finalScale = fitScale * userScale;              // user zoom multiplies on top
@@ -94,10 +105,118 @@ export function PDFViewer({ pdfData, currentPage: externalPage, onPageChange }: 
     canvas.height = viewport.height;
     canvas.width = viewport.width;
 
+    // Resize overlay canvas to match
+    if (overlayCanvasRef.current) {
+      overlayCanvasRef.current.height = canvas.height;
+      overlayCanvasRef.current.width = canvas.width;
+    }
+
     const task = page.render({ canvasContext: ctx, viewport });
     renderTaskRef.current = task;
     await task.promise;
     renderTaskRef.current = null;
+
+    // Draw highlights on overlay if excerpt is set
+    if (highlightExcerpt && overlayCanvasRef.current) {
+      await drawHighlights(page, finalScale, highlightExcerpt);
+    }
+  }, [highlightExcerpt]);
+
+  // ── Highlight drawing ────────────────────────────────────────────────────
+  const drawHighlights = useCallback(async (page: PDFPage, finalScale: number, excerpt: string) => {
+    const overlay = overlayCanvasRef.current;
+    if (!overlay) return;
+    
+    const octx = overlay.getContext("2d");
+    if (!octx) return;
+    
+    // Clear previous highlights
+    octx.clearRect(0, 0, overlay.width, overlay.height);
+    
+    try {
+      const textContent = await page.getTextContent();
+      const searchStr = excerpt.toLowerCase().replace(/\s+/g, " ").trim();
+      if (!searchStr) return;
+      
+      // Build full text string and map characters to items/positions
+      const items = textContent.items;
+      let fullText = "";
+      const charMap: Array<{ itemIdx: number; charIdx: number }> = [];
+      
+      for (let i = 0; i < items.length; i++) {
+        const str = items[i].str;
+        for (let j = 0; j < str.length; j++) {
+          fullText += str[j];
+          charMap.push({ itemIdx: i, charIdx: j });
+        }
+        // Add space between items except when already has trailing space
+        if (i < items.length - 1) {
+          const next = items[i + 1];
+          if (next.str && next.str.length > 0 && next.str[0] !== " ") {
+            fullText += " ";
+            charMap.push({ itemIdx: i, charIdx: -1 }); // space marker
+          }
+        }
+      }
+      
+      // Normalize full text for matching
+      const normalizedFull = fullText.toLowerCase().replace(/\s+/g, " ").trim();
+      const startIdx = normalizedFull.indexOf(searchStr);
+      if (startIdx === -1) return;
+
+      const endIdx = startIdx + searchStr.length;
+      
+      // Map back to item positions and draw rectangles
+      octx.fillStyle = "rgba(255, 222, 89, 0.35)";
+      octx.strokeStyle = "rgba(255, 145, 77, 0.7)";
+      octx.lineWidth = 1;
+      
+      let currentItemIdx = -1;
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      
+      const flushRect = () => {
+        if (currentItemIdx === -1 || minX === Infinity) return;
+        const item = items[currentItemIdx];
+        const tx = item.transform;
+        // Adjust for viewport scale
+        const x = minX * finalScale;
+        const y = minY * finalScale;
+        const w = (maxX - minX) * finalScale;
+        const h = (maxY - minY) * finalScale;
+        octx.fillRect(x, y, Math.max(w, 2), h + 2);
+        octx.strokeRect(x, y, Math.max(w, 2), h + 2);
+      };
+      
+      for (let i = startIdx; i < endIdx && i < charMap.length; i++) {
+        const { itemIdx, charIdx } = charMap[i];
+        if (charIdx === -1) {
+          flushRect();
+          currentItemIdx = -1;
+          minX = Infinity; maxX = -Infinity;
+          continue;
+        }
+        
+        if (itemIdx !== currentItemIdx) {
+          flushRect();
+          currentItemIdx = itemIdx;
+          minX = Infinity; maxX = -Infinity;
+        }
+        
+        const item = items[itemIdx];
+        if (item.width && charIdx < item.str.length) {
+          const charWidth = item.width / item.str.length;
+          const charX = item.transform[4] + charIdx * charWidth;
+          const charY = item.transform[5];
+          minX = Math.min(minX, charX);
+          minY = Math.min(minY, charY);
+          maxX = Math.max(maxX, charX + charWidth);
+          maxY = Math.max(maxY, charY + (item.height || 12));
+        }
+      }
+      flushRect();
+    } catch (e) {
+      console.warn("Highlight drawing failed:", e);
+    }
   }, []);
 
   // ── 3. Load PDF document ─────────────────────────────────────────────────
@@ -178,12 +297,40 @@ export function PDFViewer({ pdfData, currentPage: externalPage, onPageChange }: 
   const toggleFullscreen = () => {
     if (!document.fullscreenElement) {
       containerRef.current?.requestFullscreen();
-      setIsFullscreen(true);
     } else {
       document.exitFullscreen();
-      setIsFullscreen(false);
     }
   };
+
+  // ── Fullscreen change handler: re-render at new container size ───────────
+  useEffect(() => {
+    const onFullscreenChange = () => {
+      const nowFullscreen = !!document.fullscreenElement;
+      setIsFullscreen(nowFullscreen);
+      // Wait for layout to settle after fullscreen transition, then re-render
+      if (pdfDocRef.current) {
+        setTimeout(() => {
+          renderPage(currentPage, pdfDocRef.current!, scale).catch(console.error);
+        }, 150);
+      }
+    };
+    document.addEventListener("fullscreenchange", onFullscreenChange);
+    return () => document.removeEventListener("fullscreenchange", onFullscreenChange);
+  }, [currentPage, scale, renderPage]);
+
+  // ── ResizeObserver: re-render when container width changes ───────────────
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+
+    const observer = new ResizeObserver(() => {
+      if (pdfDocRef.current) {
+        renderPage(currentPage, pdfDocRef.current, scale).catch(console.error);
+      }
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [currentPage, scale, renderPage]);
 
   if (error) {
     return (

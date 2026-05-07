@@ -300,3 +300,40 @@ export async function cleanupExpiredSessions(maxAgeMs: number = 24 * 60 * 60 * 1
     };
   });
 }
+
+/**
+ * Clean up orphaned records (keys starting with a prefix like "pending_")
+ * Call this on app startup to remove stale pre-upload records.
+ */
+export async function cleanupOrphanedSessions(prefix: string = "pending_"): Promise<void> {
+  const db = await openDB();
+  
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction([STORE_NAME], 'readwrite');
+    const store = transaction.objectStore(STORE_NAME);
+    
+    const request = store.openCursor();
+    let deleted = 0;
+    
+    request.onsuccess = (event) => {
+      const cursor = (event.target as IDBRequest<IDBCursorWithValue>).result;
+      if (cursor) {
+        const record = cursor.value as VaultRecord;
+        if (record.sessionId.startsWith(prefix)) {
+          cursor.delete();
+          deleted++;
+        }
+        cursor.continue();
+      }
+    };
+    
+    request.onerror = () => reject(request.error);
+    transaction.oncomplete = () => {
+      db.close();
+      if (deleted > 0) {
+        console.log(`[IndexedDB] Cleaned ${deleted} orphaned "${prefix}" records`);
+      }
+      resolve();
+    };
+  });
+}

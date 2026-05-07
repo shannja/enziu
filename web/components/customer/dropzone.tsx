@@ -5,10 +5,10 @@ import { useDropzone } from "react-dropzone";
 import { Upload, FileText, X, AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { motion } from "framer-motion";
-import { storePDF } from "@/lib/pdf-storage";
+import { storePDF, deleteSession } from "@/lib/pdf-storage";
 
-// 5MB file size limit for localStorage compatibility
-const MAX_FILE_SIZE_MB = 5;
+// Read max upload size from environment variable, default to 10MB
+const MAX_FILE_SIZE_MB = parseInt(process.env.NEXT_PUBLIC_MAX_UPLOAD_SIZE_MB || "10", 10);
 const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
 
 interface CustomerDropzoneProps {
