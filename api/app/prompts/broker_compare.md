@@ -18,7 +18,7 @@ Broker Question: {question}
 
 Rules:
 - Search BOTH documents for the relevant clause
-- Quote exactly what each document states — verbatim text only
+- Quote exactly what each document states - verbatim text only
 - Return page numbers for both policies
 - State which policy is better on this dimension with a clear rationale
 - Use plain English only — no legal advice

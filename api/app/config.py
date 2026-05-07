@@ -30,15 +30,8 @@ class Settings(BaseSettings):
     inference_api_base: str = "https://inference.api.nscale.com/v1"
     inference_model: str = "meta-llama/Llama-3.3-70B-Instruct"
     
-    # Sneak Peek Model (cheaper model for free tier)
-    sneak_peek_model: str = "Qwen/Qwen3-14B"
-    sneak_peek_api_base: str = ""  # Defaults to inference_api_base if empty
-    sneak_peek_api_key: str = ""   # Defaults to inference_api_key if empty
-    
-    # Chat Model (cheaper model for Deep Dive Q&A)
-    chat_model: str = "Qwen/Qwen3-8B"
-    chat_api_base: str = ""        # Defaults to inference_api_base if empty
-    chat_api_key: str = ""         # Defaults to inference_api_key if empty
+    # All inference goes through a single model (Llama 4 Scout 17B, 890K context)
+    # No separate sneak peek or chat models needed
 
     # Upstash Redis
     upstash_redis_rest_url: str = ""

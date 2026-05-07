@@ -405,18 +405,15 @@ async def decrement_credits(
 
 
 # ===========================================
-# Policy Audit (Map-Reduce)
+# Policy Audit (Single-Shot, Llama 4 Scout)
 # ===========================================
 
 @limiter.limit(RATE_LIMITS["upload"])
 @app.post("/api/policy/audit", response_model=AuditResponse)
 async def audit_policy(request: Request, body: AuditRequest) -> AuditResponse:
     """
-    Generate a Master Policy Fact Sheet using Map-Reduce.
-    Chunks the policy text, processes each chunk in parallel with Llama 70B,
-    then merges the results into a single fact sheet.
-    
-    This is a more efficient alternative to /api/analyze/full for large policies.
+    Generate a Master Policy Fact Sheet using single-shot inference.
+    Llama 4 Scout's 890K context handles the full policy in one call.
     """
     logger.info(f"audit_policy() - session={body.session_id}, text_length={len(body.extracted_text)}")
     

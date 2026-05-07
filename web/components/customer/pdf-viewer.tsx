@@ -277,6 +277,16 @@ export function PDFViewer({ pdfData, currentPage: externalPage, highlightExcerpt
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [externalPage]);
 
+  // ── 6. Re-render when loading completes (fixes first-page after async load) ──
+  useEffect(() => {
+    if (!isLoading && pdfDocRef.current) {
+      requestAnimationFrame(() => {
+        renderPage(currentPage, pdfDocRef.current!, scale).catch(console.error);
+      });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLoading]);
+
   // ── Navigation ───────────────────────────────────────────────────────────
   const goToPage = useCallback((page: number) => {
     if (!pdfDocRef.current || page < 1 || page > numPages) return;

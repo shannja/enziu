@@ -119,7 +119,7 @@ export function FullReport({ result, pdfData: propPdfData, isGenerating = false,
 
       {/* Split View: PDF + Report */}
       <div className={cn(
-        "grid gap-8 transition-all duration-300",
+        "grid gap-2 transition-all duration-300",
         showPdfViewer ? "grid-cols-1 lg:grid-cols-2" : "grid-cols-1"
       )}>
         {/* PDF Viewer - Sticky on desktop */}

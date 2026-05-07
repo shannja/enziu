@@ -183,6 +183,7 @@ export function PaddleCheckout({
           }
 
           if (event.name === "checkout.closed") {
+            document.body.style.overflow = ""; // Restore body scroll
             // Only reset if payment did NOT complete — avoid wiping a successful flow
             if (!paymentCompletedRef.current) {
               setIsProcessing(false);
@@ -194,6 +195,7 @@ export function PaddleCheckout({
           }
 
           if (event.name === "checkout.error") {
+            document.body.style.overflow = ""; // Restore body scroll
             setIsProcessing(false);
             setError("Checkout encountered an error. Please try again.");
           }
@@ -265,6 +267,7 @@ export function PaddleCheckout({
 
       // Close the Paddle overlay — Paddle v2 does NOT auto-close on completion
       window.Paddle?.Checkout.close();
+      document.body.style.overflow = ""; // Restore body scroll
 
       clearStoredPayment();
       onPaymentComplete();
@@ -285,6 +288,7 @@ export function PaddleCheckout({
     paymentCompletedRef.current = false;
 
     setStoredPayment({ sessionId, status: "pending", timestamp: Date.now() });
+    document.body.style.overflow = "hidden"; // Hide body scroll during Paddle overlay
 
     try {
       const res = await fetch("/api/paddle/transaction", {
@@ -305,6 +309,7 @@ export function PaddleCheckout({
       window.Paddle.Checkout.open({ transactionId: transaction_id });
       // isProcessing stays true until checkout.completed or checkout.closed
     } catch (err) {
+      document.body.style.overflow = ""; // Restore body scroll on error
       setError(err instanceof Error ? err.message : "Could not open checkout. Please try again.");
       setIsProcessing(false);
       clearStoredPayment();

@@ -35,6 +35,7 @@ export function CustomerMode() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [isGeneratingReport, setIsGeneratingReport] = useState(false);
   const [reportError, setReportError] = useState<string | null>(null);
+  const [sneakPeekRemaining, setSneakPeekRemaining] = useState(3);
 
   // Clean up stale IndexedDB records on mount
   useEffect(() => {
@@ -42,7 +43,32 @@ export function CustomerMode() {
     cleanupOrphanedSessions("pending_");
   }, []);
 
+  // 3/day sneak peek rate limit
+  useEffect(() => {
+    const STORAGE_KEY = "enziu_sneak_count";
+    const today = new Date().toDateString();
+    try {
+      const stored = localStorage.getItem(STORAGE_KEY);
+      const data = stored ? JSON.parse(stored) : { date: today, count: 0 };
+      // Reset if new day
+      if (data.date !== today) {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify({ date: today, count: 0 }));
+        setSneakPeekRemaining(3);
+      } else {
+        setSneakPeekRemaining(Math.max(0, 3 - data.count));
+      }
+    } catch {
+      setSneakPeekRemaining(3);
+    }
+  }, []);
+
   const handleFileUploaded = async (file: File) => {
+    // Rate limit check — 3 sneak peeks per day
+    if (sneakPeekRemaining <= 0) {
+      setReportError("You've reached the daily limit of 3 free sneak peeks. Please try again tomorrow or purchase a full report.");
+      return;
+    }
+
     setStep("uploading");
 
     try {
@@ -139,78 +165,12 @@ export function CustomerMode() {
         return;
       }
 
-      // Try the new Map-Reduce policy auditor first
-      try {
-        console.log('[CustomerMode] Using Map-Reduce policy auditor');
-        const abortController = new AbortController();
-        const timeoutId = setTimeout(() => abortController.abort(), 300000);
-
-        const auditResponse = await fetch("/api/policy/audit", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            session_id: sessionId,
-            extracted_text: extractedText,
-          }),
-          signal: abortController.signal,
-        });
-
-        clearTimeout(timeoutId);
-
-        if (!auditResponse.ok) {
-          // Let the fallback handle specific error cases
-          throw new Error(`Audit failed: ${auditResponse.status}`);
-        }
-
-        const auditResult = await auditResponse.json();
-        
-        // Store the fact sheet in IndexedDB for future use
-        await storeFactSheet(sessionId, auditResult.fact_sheet);
-        
-        // Convert fact sheet to analysis result format
-        const factSheet = auditResult.fact_sheet;
-        const result = {
-          session_id: sessionId,
-            grade: {
-              overall: factSheet.grade?.overall || factSheet.grade?.score_band || "C",
-              clarity: factSheet.grade?.clarity || factSheet.grade?.clarity_grade || "C",
-              coverage: factSheet.grade?.coverage || factSheet.grade?.coverage_grade || "C",
-              claimsEfficiency: factSheet.grade?.claimsEfficiency || factSheet.grade?.claims_efficiency_grade || "C",
-            },
-            topRisk: factSheet.top_risk,
-            redFlags: (factSheet.red_flags || []).map((flag: any) => flag.type),
-          summary: factSheet.summary,
-          detailedFlags: factSheet.red_flags.map((flag: any) => ({
-            name: flag.type,
-            severity: flag.severity,
-            page: flag.page,
-            quote: flag.description,
-          })),
-          clauses: factSheet.clauses.map((clause: any, index: number) => ({
-            id: `clause-${index}`,
-            type: clause.type,
-            page: clause.page,
-            text: clause.summary,
-            plainEnglish: clause.summary,
-            concern: clause.risk_level === "high" ? "High risk" : 
-                    clause.risk_level === "medium" ? "Medium risk" : null,
-          })),
-        };
-        
-        setFullReportResult(result);
-        setStep("full-report");
-        return;
-      } catch (auditError) {
-        // Log the error but fall back to the legacy endpoint
-        console.warn('[CustomerMode] Map-Reduce audit failed, falling back to legacy endpoint:', auditError);
-      }
-
-      // Fallback to legacy /api/analyze/full endpoint
-      console.log('[CustomerMode] Falling back to legacy analysis endpoint');
+      // Single-shot full audit — Llama 4 Scout handles it in one call
+      console.log('[CustomerMode] Starting single-shot full audit');
       const abortController = new AbortController();
       const timeoutId = setTimeout(() => abortController.abort(), 300000);
 
-      const response = await fetch("/api/analyze/full", {
+      const auditResponse = await fetch("/api/policy/audit", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -222,17 +182,61 @@ export function CustomerMode() {
 
       clearTimeout(timeoutId);
 
-      if (!response.ok) {
-        if (response.status === 408 || response.status === 504) {
-          throw new Error("Analysis timed out. Please try again.");
-        }
-        if (response.status === 429) {
-          throw new Error("Rate limit exceeded. Please wait before trying again.");
-        }
-        throw new Error(`Analysis failed: ${response.status}`);
+      if (!auditResponse.ok) {
+        throw new Error(`Audit failed: ${auditResponse.status}`);
       }
 
-      const result = await response.json();
+      const auditResult = await auditResponse.json();
+      
+      // Store the fact sheet in IndexedDB for future use
+      await storeFactSheet(sessionId, auditResult.fact_sheet);
+      
+      // Convert fact sheet to analysis result format
+      const factSheet = auditResult.fact_sheet;
+      
+      // Handle grade: enziu_index returns grade as a string ("B"), sneak peek returns as object
+      const isObjectGrade = typeof factSheet.grade === 'object' && factSheet.grade !== null;
+      const overallGrade = isObjectGrade 
+        ? (factSheet.grade?.overall || factSheet.grade?.score_band || "C")
+        : (typeof factSheet.grade === 'string' ? factSheet.grade : "C");
+      const clarityGrade = isObjectGrade 
+        ? (factSheet.grade?.clarity || factSheet.grade?.clarity_grade || "C")
+        : overallGrade;
+      const coverageGrade = isObjectGrade 
+        ? (factSheet.grade?.coverage || factSheet.grade?.coverage_grade || "C")
+        : overallGrade;
+      const claimsGrade = isObjectGrade 
+        ? (factSheet.grade?.claimsEfficiency || factSheet.grade?.claims_efficiency_grade || "C")
+        : overallGrade;
+
+      const result = {
+        session_id: sessionId,
+          grade: {
+            overall: overallGrade,
+            clarity: clarityGrade,
+            coverage: coverageGrade,
+            claimsEfficiency: claimsGrade,
+          },
+          topRisk: factSheet.top_risk || factSheet.sneak_peek?.top_risk,
+          redFlags: (factSheet.red_flags || []).map((flag: any) => flag.flag_id || flag.type),
+        summary: factSheet.plain_english_summary || factSheet.summary,
+        detailedFlags: (factSheet.red_flags || []).map((flag: any) => ({
+          name: flag.flag_id || flag.type,
+          severity: flag.severity,
+          page: flag.page,
+          quote: flag.excerpt || flag.description,
+        })),
+        clauses: (factSheet.clauses || []).map((clause: any, index: number) => ({
+          id: `clause-${index}`,
+          type: clause.type,
+          page: clause.page,
+          text: clause.summary,
+          plainEnglish: clause.summary,
+          concern: clause.risk_level === "high" ? "High risk" : 
+                  clause.risk_level === "medium" ? "Medium risk" : null,
+        })),
+      };
+      
       setFullReportResult(result);
       setStep("full-report");
     } catch (error) {
