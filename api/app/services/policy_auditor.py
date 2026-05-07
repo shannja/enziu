@@ -13,10 +13,83 @@ from typing import Any, List, Dict, Optional
 
 from ..config import settings
 from ..prompts import MAP_CHUNK_PROMPT, REDUCE_FACTSHEET_PROMPT
-from .inference import InferenceClient
+from .inference import InferenceClient, _sanitize_injected_text
 
 logger = logging.getLogger("policy_auditor")
 logger.setLevel(logging.DEBUG if settings.debug else logging.INFO)
+
+
+def _safe_parse_json(raw: str, log_prefix: str = "") -> Dict[str, Any]:
+    """
+    Robust JSON extraction from LLM output.
+    Handles markdown fences, trailing commas, truncation, and extra text.
+    
+    Returns parsed dict on success, raises on failure.
+    """
+    if not raw or not raw.strip():
+        raise ValueError("Empty response from LLM")
+    
+    cleaned = raw.strip()
+    
+    # Remove markdown fences
+    cleaned = cleaned.removeprefix("```json").removeprefix("```")
+    cleaned = cleaned.removesuffix("```")
+    cleaned = cleaned.strip()
+    
+    # Find JSON object boundaries
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    
+    if start == -1 or end == -1 or end < start:
+        if log_prefix:
+            logger.debug(f"{log_prefix} raw response (first 500 chars): {raw[:500]}")
+        raise ValueError(f"No JSON object found in response")
+    
+    # Extract just the JSON portion
+    cleaned = cleaned[start:end + 1]
+    
+    # Fix trailing commas before closing braces/brackets
+    import re
+    cleaned = re.sub(r",\s*([}\]])", r"\1", cleaned)
+    
+    # Fix unterminated strings: if the JSON ends mid-string, close it with a quote
+    # Count unescaped quotes to detect unterminated strings
+    in_string = False
+    escaped = False
+    quote_count = 0
+    for ch in cleaned:
+        if escaped:
+            escaped = False
+            continue
+        if ch == "\\":
+            escaped = True
+            continue
+        if ch == '"':
+            quote_count += 1
+            in_string = not in_string
+    
+    if in_string:
+        # JSON ends mid-string — append closing quote and close any open structures
+        cleaned += '"'
+        # Try to close open braces/brackets
+        braces = 0
+        brackets = 0
+        for ch in cleaned:
+            if ch == "{":
+                braces += 1
+            elif ch == "}":
+                braces -= 1
+            elif ch == "[":
+                brackets += 1
+            elif ch == "]":
+                brackets -= 1
+        cleaned += "}" * max(0, braces)
+        cleaned += "]" * max(0, brackets)
+    
+    if log_prefix:
+        logger.debug(f"{log_prefix} cleaned JSON (first 500 chars): {cleaned[:500]}")
+    
+    return json.loads(cleaned)
 
 
 class PolicyAuditor:
@@ -106,8 +179,9 @@ class PolicyAuditor:
         logger.info(f"Processing chunk {chunk_index} ({len(chunk)} chars)")
         
         try:
-            # Prepare prompt with chunk text
-            prompt = MAP_CHUNK_PROMPT.format(chunk_text=chunk)
+            # Sanitize chunk text before inserting into prompt
+            safe_chunk = _sanitize_injected_text(chunk, f"chunk_{chunk_index}")
+            prompt = MAP_CHUNK_PROMPT.format(chunk_text=safe_chunk)
             
             # Call primary model (Llama 70B)
             raw_response = await self.primary_client._complete(
@@ -118,9 +192,8 @@ class PolicyAuditor:
                 max_retries=1,
             )
             
-            # Parse JSON response
-            cleaned = raw_response.strip().removeprefix("```json").removesuffix("```").strip()
-            chunk_facts = json.loads(cleaned)
+            # Parse JSON response using robust parser
+            chunk_facts = _safe_parse_json(raw_response, log_prefix=f"Chunk {chunk_index}")
             
             logger.info(
                 f"Chunk {chunk_index} processed: "
@@ -133,7 +206,7 @@ class PolicyAuditor:
             return chunk_facts
             
         except Exception as e:
-            logger.error(f"Error processing chunk {chunk_index}: {e}")
+            logger.error(f"Error processing chunk {chunk_index}: {e}", exc_info=True)
             # Return empty facts on error
             return {
                 "liability_limits": [],
@@ -171,9 +244,8 @@ class PolicyAuditor:
                 max_retries=1,
             )
             
-            # Parse JSON response
-            cleaned = raw_response.strip().removeprefix("```json").removesuffix("```").strip()
-            fact_sheet = json.loads(cleaned)
+            # Parse JSON response using robust parser
+            fact_sheet = _safe_parse_json(raw_response, log_prefix="Reduce")
             
             logger.info(
                 f"Reduce complete: "
@@ -188,7 +260,7 @@ class PolicyAuditor:
             return fact_sheet
             
         except Exception as e:
-            logger.error(f"Error in reduce phase: {e}")
+            logger.error(f"Error in reduce phase: {e}", exc_info=True)
             # Return minimal fact sheet on error
             return {
                 "policy_type": "unknown",
@@ -262,23 +334,24 @@ class PolicyAuditor:
         logger.info(f"analyze_sneak_peek() - session={session_id}, chars={len(text)}")
         
         try:
-            # Use the full text (Qwen 14B can handle it)
-            prompt = f"{SNEAK_PEEK_PROMPT}\n\nPolicy text:\n{text}\n\nAnalysis:"
+            # Sanitize and wrap in <document> tags for injection protection
+            safe_text = _sanitize_injected_text(text, "sneak_peek_pdf")
+            prompt = f"{SNEAK_PEEK_PROMPT}\n\n<document>\n{safe_text}\n</document>\n\nAnalysis:"
             
             # Call sneak peek model (Qwen 14B)
             raw = await self.sneak_peek_client._complete(
                 prompt=prompt,
                 system_prompt="You are ENZIU, an AI insurance policy auditor. Return ONLY valid JSON. No preamble. No markdown.",
-                max_tokens=500,
+                max_tokens=1000,
                 timeout=55.0,
                 max_retries=2,
             )
             
-            # Parse JSON response
-            cleaned = raw.strip().removeprefix("```json").removesuffix("```").strip()
-            analysis = json.loads(cleaned)
+            # Parse JSON response using robust parser
+            analysis = _safe_parse_json(raw, log_prefix="SneakPeek")
             
             # Format response
+            logger.debug(f"SneakPeek analysis keys: {list(analysis.keys())}")
             return {
                 "grade": {
                     "overall": analysis.get("score_band", "C"),
@@ -295,7 +368,7 @@ class PolicyAuditor:
             }
             
         except Exception as e:
-            logger.error(f"Sneak peek error: {e}")
+            logger.error(f"Sneak peek error: {e}", exc_info=True)
             return {
                 "grade": {"overall": "C", "clarity": "C", "coverage": "C", "claimsEfficiency": "C"},
                 "topRisk": "Unable to analyze at this time",
@@ -307,7 +380,8 @@ class PolicyAuditor:
             }
 
     async def chat(
-        self, session_id: str, message: str, fact_sheet: Dict[str, Any]
+        self, session_id: str, message: str, fact_sheet: Dict[str, Any],
+        extracted_text: str = "",
     ) -> Dict[str, Any]:
         """
         Answer a question using the fact sheet and chat model.
@@ -315,14 +389,15 @@ class PolicyAuditor:
         Args:
             session_id: Session ID for logging
             message: User's question
-            fact_sheet: Master Policy Fact Sheet
+            fact_sheet: Master Policy Fact Sheet (structured analysis)
+            extracted_text: Full raw policy text for searching
             
         Returns:
             Chat response with page citation
         """
         from ..prompts import DEEP_DIVE_PROMPT
         
-        logger.info(f"chat() - session={session_id}")
+        logger.info(f"chat() - session={session_id}, has_fact_sheet={bool(fact_sheet)}, has_extracted_text={bool(extracted_text)}")
         
         if not fact_sheet:
             raise ValueError(
@@ -330,14 +405,20 @@ class PolicyAuditor:
             )
         
         try:
-            # Serialize fact sheet to JSON string
-            fact_sheet_json = json.dumps(fact_sheet, indent=2)
+            # Build context: fact sheet for structured data, raw text for searching
+            context_parts = [f"FACT SHEET (structured analysis):\n{json.dumps(fact_sheet, indent=2)}"]
+            if extracted_text:
+                context_parts.append(f"RAW POLICY TEXT:\n{extracted_text[:100000]}")
             
-            # Prepare prompt with fact sheet and question
+            policy_context = "\n\n---\n\n".join(context_parts)
+            
+            # Prepare prompt with combined context and question
             prompt = DEEP_DIVE_PROMPT.format(
-                policy_text=fact_sheet_json,
+                policy_text=policy_context,
                 question=message,
             )
+            
+            logger.debug(f"chat() prompt length: {len(prompt)} chars")
             
             # Call chat model (Qwen 8B)
             raw = await self.chat_client._complete(

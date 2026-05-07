@@ -292,12 +292,13 @@ async def chat(request: Request, body: ChatWithContextRequest) -> ChatResponse:
     Uses fact_sheet (preferred) or falls back to extracted_text.
     """
     try:
-        # If fact sheet is provided, use the chat model with fact sheet
+        # If fact sheet is provided, use the chat model with fact sheet + raw text
         if body.fact_sheet:
             response = await policy_auditor.chat(
                 session_id=body.session_id,
                 message=body.message,
                 fact_sheet=body.fact_sheet,
+                extracted_text=body.extracted_text,
             )
             return ChatResponse(
                 response=response["response"],

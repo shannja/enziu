@@ -123,6 +123,8 @@ export function PDFViewer({ pdfData, currentPage: externalPage, onPageChange }: 
         setNumPages(pdfDoc.numPages);
         const startPage = externalPage && externalPage <= pdfDoc.numPages ? externalPage : 1;
         setCurrentPage(startPage);
+        // Defer first render until DOM has laid out (fixes first-page blank issue)
+        await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
         await renderPage(startPage, pdfDoc, scale);
         if (!cancelled) setIsLoading(false);
       } catch (err) {
@@ -202,31 +204,31 @@ export function PDFViewer({ pdfData, currentPage: externalPage, onPageChange }: 
       {/* Toolbar */}
       <div className="flex items-center justify-between px-4 py-2 bg-background border-b border-border shrink-0">
         <div className="flex items-center gap-2">
-          <Button variant="amber" size="sm" onClick={() => goToPage(currentPage - 1)} disabled={currentPage <= 1}>
+          <Button variant="ghost" size="sm" onClick={() => goToPage(currentPage - 1)} disabled={currentPage <= 1}>
             <ChevronLeft className="h-4 w-4" />
           </Button>
           <span className="text-sm text-muted-foreground min-w-[80px] text-center">
             Page {currentPage} of {numPages || "…"}
           </span>
-          <Button variant="amber" size="sm" onClick={() => goToPage(currentPage + 1)} disabled={currentPage >= numPages}>
+          <Button variant="ghost" size="sm" onClick={() => goToPage(currentPage + 1)} disabled={currentPage >= numPages}>
             <ChevronRight className="h-4 w-4" />
           </Button>
         </div>
 
         <div className="flex items-center gap-2">
-          <Button variant="amber" size="sm" onClick={() => setScale(s => Math.max(+(s - 0.25).toFixed(2), 0.25))} disabled={scale <= 0.25}>
+          <Button variant="ghost" size="sm" onClick={() => setScale(s => Math.max(+(s - 0.25).toFixed(2), 0.25))} disabled={scale <= 0.25}>
             <ZoomOut className="h-4 w-4" />
           </Button>
           <span className="text-xs text-muted-foreground min-w-[44px] text-center">
             {Math.round(scale * 100)}%
           </span>
-          <Button variant="amber" size="sm" onClick={() => setScale(s => Math.min(+(s + 0.25).toFixed(2), 4))} disabled={scale >= 4}>
+          <Button variant="ghost" size="sm" onClick={() => setScale(s => Math.min(+(s + 0.25).toFixed(2), 4))} disabled={scale >= 4}>
             <ZoomIn className="h-4 w-4" />
           </Button>
-          <Button variant="amber" size="sm" onClick={() => setScale(1)} title="Reset zoom">
+          <Button variant="ghost" size="sm" onClick={() => setScale(1)} title="Reset zoom">
             <Minimize className="h-4 w-4" />
           </Button>
-          <Button variant="amber" size="sm" onClick={toggleFullscreen} title="Fullscreen">
+          <Button variant="ghost" size="sm" onClick={toggleFullscreen} title="Fullscreen">
             <Maximize className="h-4 w-4" />
           </Button>
         </div>

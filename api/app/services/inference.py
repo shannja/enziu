@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 from typing import Any
 
@@ -19,6 +20,55 @@ from ..prompts import SNEAK_PEEK_PROMPT, ENZIU_INDEX_PROMPT, DEEP_DIVE_PROMPT, C
 
 logger = logging.getLogger("inference")
 logger.setLevel(logging.DEBUG if settings.debug else logging.INFO)
+
+# Injection patterns to strip from user-provided text before it enters any prompt
+_INJECTION_PATTERNS = [
+    re.compile(r"ignore\s+(all\s+)?(previous|prior|above|foregoing)\s+instructions?", re.IGNORECASE),
+    re.compile(r"you\s+are\s+now\s+\w+", re.IGNORECASE),
+    re.compile(r"<\|im_start\|>|<\|im_end\|>", re.IGNORECASE),
+    re.compile(r"^\s*(system|assistant|user)\s*:", re.IGNORECASE | re.MULTILINE),
+    re.compile(r"\[system\]|\[assistant\]|\[user\]", re.IGNORECASE),
+    re.compile(r"override\s+(the\s+)?(system\s+)?prompt", re.IGNORECASE),
+    re.compile(r"disregard\s+(all\s+)?(previous\s+)?instructions", re.IGNORECASE),
+    re.compile(r"new\s+instructions?\s*(:|=)", re.IGNORECASE),
+    re.compile(r"\[/INST\]|<<SYS>>|<</SYS>>"),  # Llama instruction tags
+]
+
+
+def _sanitize_injected_text(text: str, source: str = "") -> str:
+    """
+    Strip prompt injection patterns from user-controlled text.
+    Logs a warning if anything was modified.
+    
+    Args:
+        text: Raw text from user (PDF content, chat message, etc.)
+        source: Label for logging (e.g. "pdf_extract", "chat_message")
+        
+    Returns:
+        Sanitized text with injection patterns removed
+    """
+    if not text:
+        return text
+    
+    cleaned = text
+    
+    # Strip NUL bytes and other dangerous control characters (keep \n, \r, \t)
+    cleaned = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", cleaned)
+    
+    # Strip injection patterns
+    stripped_count = 0
+    for pattern in _INJECTION_PATTERNS:
+        before = len(cleaned)
+        cleaned = pattern.sub("[REDACTED]", cleaned)
+        stripped_count += before - len(cleaned)
+    
+    if stripped_count > 0:
+        logger.warning(
+            f"Prompt injection sanitized ({source}): {stripped_count} chars stripped. "
+            f"Original first 200 chars: {text[:200]}"
+        )
+    
+    return cleaned
 
 
 class InferenceClient:
@@ -88,6 +138,8 @@ class InferenceClient:
                     data = response.json()
                     if "choices" in data and data["choices"]:
                         content = data["choices"][0]["message"]["content"]
+                        if content is None:
+                            raise Exception("Inference API returned null content in response")
                         logger.info(f"Response received - {len(content)} chars")
                         return content
                     raise Exception(f"Unexpected response format: {list(data.keys())}")
@@ -172,7 +224,8 @@ class InferenceClient:
         """Full paid analysis — called from /api/analyze/full which has a 5-min budget."""
         logger.info(f"analyze_policy() - session={session_id}, chars={len(extracted_text)}")
 
-        prompt = f"{ENZIU_INDEX_PROMPT}\n\nFull policy text:\n{extracted_text}\n\nAnalysis:"
+        safe_text = _sanitize_injected_text(extracted_text, "analyze_policy")
+        prompt = f"{ENZIU_INDEX_PROMPT}\n\n<document>\n{safe_text}\n</document>\n\nAnalysis:"
 
         try:
             raw = await self._complete(
@@ -240,10 +293,12 @@ class InferenceClient:
 
         logger.info(f"chat() - session={session_id}, policy_chars={len(policy_text)}")
 
-        # Send the FULL policy text (up to 100k chars) so the LLM can read the whole document
+        # Sanitize both the policy text and user question
+        safe_policy_text = _sanitize_injected_text(policy_text[:100000], "chat_policy")
+        safe_message = _sanitize_injected_text(message, "chat_message")
         prompt = DEEP_DIVE_PROMPT.format(
-            policy_text=policy_text[:100000],
-            question=message,
+            policy_text=safe_policy_text,
+            question=safe_message,
         )
 
         # Single attempt, tight timeout — serverless functions must respond quickly

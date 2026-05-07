@@ -45,49 +45,7 @@ export function DeepDiveChat({ sessionId, onChatComplete }: DeepDiveChatProps) {
     setChatsRemaining((prev) => prev - 1);
 
     try {
-      // Try to get fact sheet first (preferred)
-      const factSheet = await getFactSheet(sessionId);
-      
-      // If we have a fact sheet, use it for the chat
-      if (factSheet) {
-        console.log('[DeepDiveChat] Using fact sheet for chat');
-        
-        const response = await fetch(`/api/chat`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            session_id: sessionId,
-            message: userMessage.content,
-            fact_sheet: factSheet,
-          }),
-        });
-        
-        if (!response.ok) throw new Error("Chat failed");
-        
-        const data = await response.json();
-        
-        const assistantMessage: ChatMessage = {
-          role: "assistant",
-          content: data.response,
-          page: data.page,
-          disclaimer: data.disclaimer || "page X — not legal advice",
-        };
-        
-        // Store excerpt for potential PDF viewer navigation
-        if (data.excerpt) {
-          sessionStorage.setItem("enziu_last_excerpt", data.excerpt);
-        }
-        
-        setMessages((prev) => [...prev, assistantMessage]);
-        return;
-      }
-      
-      // Fallback: Use extracted text if no fact sheet
-      console.log('[DeepDiveChat] No fact sheet found, falling back to extracted text');
-      
-      // Gold-Handoff: Get extracted text from sessionStorage or IndexedDB
+      // Gold-Handoff: Get extracted text from sessionStorage or IndexedDB (always needed)
       let extractedText = sessionStorage.getItem("enziu_vault");
       if (!extractedText) {
         extractedText = await getText(sessionId);
@@ -97,16 +55,29 @@ export function DeepDiveChat({ sessionId, onChatComplete }: DeepDiveChatProps) {
         throw new Error("No policy text found. Please re-upload your PDF.");
       }
 
+      // Try to get fact sheet for structured context
+      const factSheet = await getFactSheet(sessionId);
+      
+      // Always send both fact_sheet and extracted_text when both are available
+      const chatBody: Record<string, any> = {
+        session_id: sessionId,
+        message: userMessage.content,
+        extracted_text: extractedText,
+      };
+      
+      if (factSheet) {
+        chatBody.fact_sheet = factSheet;
+        console.log('[DeepDiveChat] Sending fact sheet + extracted text for chat');
+      } else {
+        console.log('[DeepDiveChat] No fact sheet found, using extracted text only');
+      }
+
       const response = await fetch(`/api/chat`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({
-          session_id: sessionId,
-          message: userMessage.content,
-          extracted_text: extractedText,
-        }),
+        body: JSON.stringify(chatBody),
       });
 
       if (!response.ok) throw new Error("Chat failed");
@@ -117,7 +88,7 @@ export function DeepDiveChat({ sessionId, onChatComplete }: DeepDiveChatProps) {
         role: "assistant",
         content: data.response,
         page: data.page,
-        disclaimer: data.disclaimer || "page X — not legal advice",
+        disclaimer: data.disclaimer || "This is not legal advice. Please consult your broker for details.",
       };
 
       // Store excerpt for potential PDF viewer navigation
@@ -131,7 +102,7 @@ export function DeepDiveChat({ sessionId, onChatComplete }: DeepDiveChatProps) {
       const errorMessage: ChatMessage = {
         role: "assistant",
         content: "Sorry, I couldn't process that question. Please try again.",
-        disclaimer: "page X — not legal advice",
+        disclaimer: "This is not legal advice. Please consult your broker for details.",
       };
       setMessages((prev) => [...prev, errorMessage]);
     } finally {

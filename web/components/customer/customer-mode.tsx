@@ -167,9 +167,14 @@ export function CustomerMode() {
         const factSheet = auditResult.fact_sheet;
         const result = {
           session_id: sessionId,
-          grade: factSheet.grade,
-          topRisk: factSheet.top_risk,
-          redFlags: factSheet.red_flags.map((flag: any) => flag.type),
+            grade: {
+              overall: factSheet.grade?.overall || factSheet.grade?.score_band || "C",
+              clarity: factSheet.grade?.clarity || factSheet.grade?.clarity_grade || "C",
+              coverage: factSheet.grade?.coverage || factSheet.grade?.coverage_grade || "C",
+              claimsEfficiency: factSheet.grade?.claimsEfficiency || factSheet.grade?.claims_efficiency_grade || "C",
+            },
+            topRisk: factSheet.top_risk,
+            redFlags: (factSheet.red_flags || []).map((flag: any) => flag.type),
           summary: factSheet.summary,
           detailedFlags: factSheet.red_flags.map((flag: any) => ({
             name: flag.type,
