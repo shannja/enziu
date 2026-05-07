@@ -5,10 +5,11 @@ Rate limiting, input validation, security headers, and authentication.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import time
-from typing import Callable, Awaitable
+from typing import Any, Callable, Awaitable
 
 from fastapi import Request, HTTPException, status
 from fastapi.responses import JSONResponse
@@ -116,7 +117,10 @@ class InputValidationMiddleware(BaseHTTPMiddleware):
     # Allowed file extensions
     ALLOWED_EXTENSIONS = {'.pdf'}
     
-    # Maximum string length for text inputs
+    # Endpoints that accept multipart/form-data (file uploads)
+    UPLOAD_ENDPOINTS = {"/api/extract", "/api/upload/batch"}
+    
+    # Maximum string length for text inputs in JSON bodies
     MAX_STRING_LENGTH = 10000
     
     async def dispatch(
@@ -138,7 +142,7 @@ class InputValidationMiddleware(BaseHTTPMiddleware):
             content_type = request.headers.get("Content-Type", "")
             
             # Allow multipart for file uploads
-            if "/upload" in request.url.path:
+            if request.url.path in self.UPLOAD_ENDPOINTS:
                 if "multipart/form-data" not in content_type:
                     logger.warning(
                         f"Invalid content type for upload from {request.client.host}: {content_type}"
@@ -165,6 +169,26 @@ class InputValidationMiddleware(BaseHTTPMiddleware):
             )
         
         return await call_next(request)
+    
+    def _validate_string_lengths(self, data: Any, path: str, depth: int = 0) -> None:
+        """Recursively validate string lengths in JSON data."""
+        if depth > 10:
+            return  # Prevent infinite recursion on circular refs
+        
+        if isinstance(data, dict):
+            for key, value in data.items():
+                if isinstance(value, str) and len(value) > self.MAX_STRING_LENGTH:
+                    logger.warning(
+                        f"String field '{key}' too long ({len(value)} chars) at {path}"
+                    )
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"Field '{key}' exceeds maximum length of {self.MAX_STRING_LENGTH} characters"
+                    )
+                self._validate_string_lengths(value, path, depth + 1)
+        elif isinstance(data, list):
+            for item in data:
+                self._validate_string_lengths(item, path, depth + 1)
     
     def _is_suspicious_user_agent(self, user_agent: str) -> bool:
         """Check for suspicious user agents."""

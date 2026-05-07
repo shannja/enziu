@@ -1,15 +1,16 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { formatCurrency, generateRandomPassphrase, copyToClipboard } from "@/lib/utils";
-import { CreditCard, Apple, Smartphone, RefreshCw, Copy, Check } from "lucide-react";
+import { formatCurrency } from "@/lib/utils";
+import { CreditCard, Apple, Smartphone, RefreshCw } from "lucide-react";
 
 interface PaddleCheckoutProps {
   amount: number;
   sessionId: string;
-  onPaymentComplete: (voucherCode?: string) => void;
+  extractedText?: string;
+  onPaymentComplete: () => void;
 }
 
 declare global {
@@ -25,6 +26,7 @@ declare global {
           items?: Array<{ priceId: string; quantity?: number }>;
           customData?: Record<string, unknown>;
         }) => void;
+        close: () => void;
       };
       Environment: {
         set: (env: "sandbox" | "production") => void;
@@ -41,6 +43,33 @@ interface PaddleEvent {
   };
 }
 
+type PaymentStatus = "pending" | "paid";
+
+interface StoredPayment {
+  sessionId: string;
+  status: PaymentStatus;
+  timestamp: number;
+}
+
+const STORAGE_KEY = "enziu_payment";
+
+function getStoredPayment(): StoredPayment | null {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return raw ? (JSON.parse(raw) as StoredPayment) : null;
+  } catch {
+    return null;
+  }
+}
+
+function setStoredPayment(data: StoredPayment) {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+}
+
+function clearStoredPayment() {
+  localStorage.removeItem(STORAGE_KEY);
+}
+
 export function PaddleCheckout({
   amount,
   sessionId,
@@ -48,20 +77,81 @@ export function PaddleCheckout({
 }: PaddleCheckoutProps) {
   const [isPaddleLoaded, setIsPaddleLoaded] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [passphrase, setPassphrase] = useState("");
-  const [showPassphraseInfo, setShowPassphraseInfo] = useState(false);
-  const [generatedVoucher, setGeneratedVoucher] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isCheckingStatus, setIsCheckingStatus] = useState(false);
 
-  // Ref so the eventCallback closure always sees the latest passphrase value
-  const passphraseRef = useRef(passphrase);
-  useEffect(() => {
-    passphraseRef.current = passphrase;
-  }, [passphrase]);
+  // Track whether checkout.completed fired so checkout.closed doesn't wipe it
+  const paymentCompletedRef = useRef(false);
+  const pollingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // ── Recovery: check localStorage on mount ───────────────────────────────
   useEffect(() => {
-    // Don't re-initialise if Paddle is already on the page
+    const stored = getStoredPayment();
+    if (!stored || stored.sessionId !== sessionId) return;
+
+    if (stored.status === "paid") {
+      onPaymentComplete();
+    } else if (stored.status === "pending") {
+      startPaymentPolling();
+    }
+
+    return () => stopPaymentPolling();
+  // onPaymentComplete intentionally omitted — stable callback ref expected from parent
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId]);
+
+  // ── Polling ──────────────────────────────────────────────────────────────
+  const MAX_ATTEMPTS = 10;
+  const POLL_INTERVAL_MS = 20_000;
+
+  function stopPaymentPolling() {
+    if (pollingIntervalRef.current) {
+      clearInterval(pollingIntervalRef.current);
+      pollingIntervalRef.current = null;
+    }
+    setIsCheckingStatus(false);
+  }
+
+  function startPaymentPolling() {
+    setIsCheckingStatus(true);
+    let attempts = 0;
+
+    stopPaymentPolling();
+
+    const poll = async () => {
+      attempts++;
+      try {
+        const res = await fetch(`/api/paddle/status?session_id=${sessionId}`);
+        if (!res.ok) throw new Error("Status check failed");
+
+        const { paid } = await res.json();
+        if (paid) {
+          stopPaymentPolling();
+          clearStoredPayment();
+          onPaymentComplete();
+          return;
+        }
+
+        if (attempts >= MAX_ATTEMPTS) {
+          stopPaymentPolling();
+          setError("Payment verification timed out. Contact support if you were charged.");
+        } else {
+          setError(`Verifying payment… (${attempts}/${MAX_ATTEMPTS})`);
+        }
+      } catch {
+        if (attempts >= MAX_ATTEMPTS) {
+          stopPaymentPolling();
+          setError("Could not verify payment status. Please contact support.");
+        }
+      }
+    };
+
+    poll(); // immediate first check
+    pollingIntervalRef.current = setInterval(poll, POLL_INTERVAL_MS);
+  }
+
+  // ── Load Paddle.js ───────────────────────────────────────────────────────
+  useEffect(() => {
     if (window.Paddle) {
       setIsPaddleLoaded(true);
       return;
@@ -77,10 +167,11 @@ export function PaddleCheckout({
       const clientToken = process.env.NEXT_PUBLIC_PADDLE_CLIENT_TOKEN;
       if (!clientToken) {
         console.error("Paddle client token not configured");
+        setError("Payment provider not configured.");
         return;
       }
 
-      // Environment MUST be set before Initialize
+      // Environment must be set before Initialize
       window.Paddle.Environment.set("sandbox");
       window.Paddle.Initialize({
         token: clientToken,
@@ -90,9 +181,18 @@ export function PaddleCheckout({
           if (event.name === "checkout.completed") {
             handlePaymentSuccess(event.data?.transaction_id);
           }
+
           if (event.name === "checkout.closed") {
-            setIsProcessing(false);
+            // Only reset if payment did NOT complete — avoid wiping a successful flow
+            if (!paymentCompletedRef.current) {
+              setIsProcessing(false);
+              const stored = getStoredPayment();
+              if (stored?.sessionId === sessionId && stored.status === "pending") {
+                clearStoredPayment();
+              }
+            }
           }
+
           if (event.name === "checkout.error") {
             setIsProcessing(false);
             setError("Checkout encountered an error. Please try again.");
@@ -111,59 +211,82 @@ export function PaddleCheckout({
     return () => {
       if (document.body.contains(script)) document.body.removeChild(script);
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Called by the Paddle eventCallback when checkout.completed fires
-  const handlePaymentSuccess = async (txnId?: string) => {
-    setIsProcessing(true);
-    setError(null);
+  // ── Verify payment with exponential backoff ──────────────────────────────
+  async function verifyPaymentWithRetry(txnId: string, maxRetries = 3): Promise<void> {
+    let lastError: Error = new Error("Unknown verification error");
 
-    try {
-      // Verify payment server-side and receive generated voucher
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      if (attempt > 0) {
+        await new Promise((r) => setTimeout(r, Math.pow(2, attempt) * 1000));
+      }
+
       const res = await fetch("/api/paddle/verify", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          transaction_id: txnId,
-          session_id: sessionId,
-          passphrase: passphraseRef.current,
-        }),
+        body: JSON.stringify({ transaction_id: txnId, session_id: sessionId }),
       });
 
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.detail || "Payment verification failed");
+      if (res.ok) return; // success
+
+      const body = await res.json().catch(() => ({}));
+
+      if (res.status === 400) {
+        throw new Error(body.detail || "Invalid transaction ID");
       }
 
-      const { voucher_code } = await res.json();
-      setGeneratedVoucher(voucher_code);
-      onPaymentComplete(voucher_code);
-    } catch (err) {
-      console.error("Payment verification error:", err);
-      setError(
-        err instanceof Error
-          ? err.message
-          : "Verification failed. Please contact support."
-      );
-    } finally {
-      setIsProcessing(false);
+      // 402 = payment not yet reflected — retry
+      lastError = new Error(body.detail || `Verification failed (${res.status})`);
+      if (res.status !== 402) throw lastError;
     }
-  };
 
-  const handleCheckout = async () => {
-    if (!window.Paddle) return;
-    if (!passphrase || passphrase.length < 8) {
-      setError("Please generate or enter a passphrase (minimum 8 characters)");
+    throw lastError;
+  }
+
+  // ── Handle checkout.completed ────────────────────────────────────────────
+  async function handlePaymentSuccess(txnId?: string) {
+    if (!txnId) {
+      setError("No transaction ID received.");
       return;
     }
 
+    // Mark completed so checkout.closed handler doesn't reset state
+    paymentCompletedRef.current = true;
     setIsProcessing(true);
     setError(null);
 
     try {
-      // Create a server-side transaction first.
-      // This is what fixes the 400 — passing items[] directly to Checkout.open()
-      // hits the /paddlejs endpoint which is stricter about price ID validation.
+      await verifyPaymentWithRetry(txnId);
+
+      // Persist confirmed status before closing overlay
+      setStoredPayment({ sessionId, status: "paid", timestamp: Date.now() });
+
+      // Close the Paddle overlay — Paddle v2 does NOT auto-close on completion
+      window.Paddle?.Checkout.close();
+
+      clearStoredPayment();
+      onPaymentComplete();
+    } catch (err) {
+      paymentCompletedRef.current = false;
+      setError(err instanceof Error ? err.message : "Verification failed. Please contact support.");
+    } finally {
+      setIsProcessing(false);
+    }
+  }
+
+  // ── Open checkout ────────────────────────────────────────────────────────
+  async function handleCheckout() {
+    if (!window.Paddle) return;
+
+    setIsProcessing(true);
+    setError(null);
+    paymentCompletedRef.current = false;
+
+    setStoredPayment({ sessionId, status: "pending", timestamp: Date.now() });
+
+    try {
       const res = await fetch("/api/paddle/transaction", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -179,93 +302,16 @@ export function PaddleCheckout({
       }
 
       const { transaction_id } = await res.json();
-
-      // Open checkout with the transaction ID — far more reliable than items[]
       window.Paddle.Checkout.open({ transactionId: transaction_id });
-
-      // isProcessing stays true until checkout.completed or checkout.closed fires
+      // isProcessing stays true until checkout.completed or checkout.closed
     } catch (err) {
-      console.error("Checkout error:", err);
-      setError(
-        err instanceof Error
-          ? err.message
-          : "Could not open checkout. Please try again."
-      );
+      setError(err instanceof Error ? err.message : "Could not open checkout. Please try again.");
       setIsProcessing(false);
+      clearStoredPayment();
     }
-  };
-
-  const handleGeneratePassphrase = () => {
-    setPassphrase(generateRandomPassphrase());
-    setShowPassphraseInfo(true);
-    setError(null);
-  };
-
-  const handleCopyPassphrase = async () => {
-    if (passphrase) {
-      const success = await copyToClipboard(passphrase);
-      if (success) {
-        setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
-      }
-    }
-  };
-
-  // ── Success screen ────────────────────────────────────────────────────────
-  if (generatedVoucher) {
-    return (
-      <Card className="max-w-md mx-auto border-brand-amber/30 bg-green-900/20">
-        <CardHeader className="text-center">
-          <CardTitle className="text-xl text-white flex items-center justify-center gap-2">
-            <Check className="w-6 h-6 text-green-400" />
-            Payment Successful!
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-6">
-          <div className="text-center">
-            <p className="text-sm text-muted-foreground mb-2">Your voucher code:</p>
-            <div className="text-2xl font-bold text-gradient font-mono bg-black/30 p-3 rounded-lg">
-              {generatedVoucher}
-            </div>
-          </div>
-
-          <Button
-            onClick={async () => {
-              const success = await copyToClipboard(generatedVoucher);
-              if (success) {
-                setCopied(true);
-                setTimeout(() => setCopied(false), 2000);
-              }
-            }}
-            variant="outline"
-            className="w-full"
-          >
-            {copied ? (
-              <><Check className="w-4 h-4 mr-2" />Copied!</>
-            ) : (
-              <><Copy className="w-4 h-4 mr-2" />Copy Code</>
-            )}
-          </Button>
-
-          <div className="bg-secondary/50 rounded-lg p-3 text-xs text-muted-foreground">
-            <p className="font-medium text-white mb-1">⚠️ Important:</p>
-            <ul className="space-y-1">
-              <li>• Save this voucher code safely</li>
-              <li>• Your passphrase: <strong>{passphrase}</strong></li>
-              <li>• You'll need both to recover if lost</li>
-              <li>• No email is stored — this is your only backup</li>
-            </ul>
-          </div>
-
-          <div className="text-center text-xs text-muted-foreground">
-            Full analysis unlocked! Redirecting...
-          </div>
-        </CardContent>
-      </Card>
-    );
   }
 
-  // ── Checkout form ─────────────────────────────────────────────────────────
+  // ── Render ────────────────────────────────────────────────────────────────
   return (
     <Card className="max-w-md mx-auto border-brand-amber/30">
       <CardHeader className="text-center">
@@ -274,93 +320,24 @@ export function PaddleCheckout({
       <CardContent className="space-y-6">
         <div className="text-center">
           <div className="text-3xl font-bold text-gradient">{formatCurrency(amount)}</div>
-          <p className="text-sm text-muted-foreground mt-1">
-            One-time payment • No account required
-          </p>
+          <p className="text-sm text-muted-foreground mt-1">One-time payment • No account required</p>
         </div>
 
-        {/* Passphrase */}
-        <div className="space-y-3">
-          <div className="flex items-center justify-between">
-            <label className="text-sm font-medium text-foreground">
-              Recovery Passphrase *
-            </label>
-            <button
-              type="button"
-              onClick={() => setShowPassphraseInfo(!showPassphraseInfo)}
-              className="text-xs text-gradient hover:underline"
-            >
-              What's this?
-            </button>
-          </div>
-
-          {showPassphraseInfo && (
-            <div className="bg-gradient-900/30 border rounded-lg p-3 text-xs space-y-2">
-              <p className="text-foreground mb-1 text-left text-gradient">
-                <strong>Why you need a passphrase?</strong>
-              </p>
-              <ul className="text-foreground space-y-1 list-none pl-0 text-left">
-                <li>No email required — complete privacy</li>
-                <li>Use this to recover your voucher if lost</li>
-                <li>Choose something memorable but secure</li>
-                <li>Minimum 8 characters</li>
-              </ul>
-            </div>
-          )}
-
-          <div className="flex gap-2">
-            <input
-              type="text"
-              value={passphrase}
-              onChange={(e) => { setPassphrase(e.target.value); setError(null); }}
-              placeholder="Enter or generate passphrase..."
-              className="flex-1 px-3 py-2 bg-secondary border border-border rounded-md text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-brand-amber/50"
-            />
-            <Button
-              type="button"
-              onClick={handleGeneratePassphrase}
-              variant="gradient-bg"
-              size="sm"
-              className="flex-shrink-0"
-            >
-              <RefreshCw className="w-4 h-4 mr-1" />
-              Generate
-            </Button>
-          </div>
-
-          {passphrase && (
-            <div className="flex items-center justify-between bg-secondary/50 rounded-lg p-2">
-              <div className="flex items-center gap-2">
-                <Check className="w-4 h-4 text-green-400" />
-                <span className="text-xs text-green-400 font-mono">
-                  {passphrase.length} chars
-                </span>
-              </div>
-              <button
-                type="button"
-                onClick={handleCopyPassphrase}
-                className="text-xs text-gradient hover:underline flex items-center gap-1"
-              >
-                {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
-              </button>
-            </div>
-          )}
-
-          <p className="text-xs text-muted-foreground">
-            ⚠️ Save this passphrase! It's your only way to recover your voucher.
-          </p>
-        </div>
-
-        {/* Error */}
         {error && (
           <div className="bg-red-900/20 border border-red-500/30 rounded-lg p-3 text-xs text-red-400">
             {error}
+            {isCheckingStatus && (
+              <div className="flex items-center gap-2 mt-2">
+                <RefreshCw className="w-3 h-3 animate-spin" />
+                <span>Checking payment status…</span>
+              </div>
+            )}
           </div>
         )}
 
         <Button
           onClick={handleCheckout}
-          disabled={!isPaddleLoaded || isProcessing || !passphrase || passphrase.length < 8}
+          disabled={!isPaddleLoaded || isProcessing}
           variant="gradient-bg"
           size="lg"
           className="w-full"
@@ -368,7 +345,7 @@ export function PaddleCheckout({
           {isProcessing ? (
             <span className="flex items-center gap-2">
               <span className="w-4 h-4 border-2 border-black border-t-transparent rounded-full animate-spin" />
-              Opening checkout...
+              Processing…
             </span>
           ) : (
             "Pay & Get Full Report"
@@ -382,17 +359,17 @@ export function PaddleCheckout({
         </div>
 
         <p className="text-xs text-center text-muted-foreground">
-          Secured by Paddle. Apple Pay, Google Pay, and all major cards accepted.
+          Secured by Paddle.<br /><br />Apple Pay, Google Pay, and all major cards accepted.
         </p>
 
         <div className="bg-secondary/50 rounded-lg p-3 text-xs text-muted-foreground">
-          <p className="font-medium text-gradient mb-1 text-left"><strong>Here's what you'll get!</strong></p>
+          <p className="font-medium text-gradient mb-1 text-left"><strong>Here's what you'll get after payment!</strong></p>
           <br />
           <ul className="space-y-1 list-none pl-0 text-left">
-            <li>Full ENZIU Index with page citations</li>
-            <li>All red flags with exact locations</li>
-            <li>Plain-English summary</li>
-            <li>5 Deep Dive chat questions</li>
+            <li>• Full ENZIU Index with page citations</li>
+            <li>• All red flags with exact locations</li>
+            <li>• Plain-English summary</li>
+            <li>• 5 Deep Dive chat questions</li>
           </ul>
         </div>
       </CardContent>

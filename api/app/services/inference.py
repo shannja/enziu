@@ -1,16 +1,12 @@
 """
 ENZIU Inference Service
-NScale client for Llama 3.3 70B Instruct.
-
-Provides:
-- Sneak peek analysis (free preview)
-- Full policy analysis with ENZIU Index
-- Deep Dive Q&A
-- Comparative analysis for brokers
+Generic LLM inference client for Llama 3.3 70B Instruct (or similar).
+Serverless-safe: chat uses a single attempt with a tight timeout.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -21,56 +17,46 @@ import httpx
 from ..config import settings
 from ..prompts import SNEAK_PEEK_PROMPT, ENZIU_INDEX_PROMPT, DEEP_DIVE_PROMPT, COMPARE_PROMPT
 
-# Configure logging for inference
 logger = logging.getLogger("inference")
 logger.setLevel(logging.DEBUG if settings.debug else logging.INFO)
 
-# Prompts are loaded from markdown files in api/app/prompts/
-# Edit the .md files to customize the AI behavior
-class NScaleClient:
-    """
-    Client for NScale API (OpenAI-compatible Llama 3.3 70B).
-    
-    Handles all inference operations for ENZIU analysis.
-    """
-    
-    def __init__(self) -> None:
-        self.api_key = settings.nscale_service_token
-        self.api_base = settings.nscale_api_base
-        self.model = settings.nscale_model
+
+class InferenceClient:
+    """Generic LLM inference client (OpenAI-compatible API)."""
+
+    def __init__(
+        self,
+        model: str = "",
+        api_base: str = "",
+        api_key: str = "",
+    ) -> None:
+        """
+        Initialize with optional model override.
+        
+        Args:
+            model: Override default model (optional)
+            api_base: Override default API base URL (optional)
+            api_key: Override default API key (optional)
+        """
+        self.api_key = api_key or settings.inference_api_key
+        self.api_base = api_base or settings.inference_api_base
+        self.model = model or settings.inference_model
         self.headers: dict[str, str] = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
-        logger.info(f"NScaleClient initialized - model: {self.model}, api_base: {self.api_base}")
-        logger.debug(f"API key prefix: {self.api_key[:8]}..." if self.api_key else "No API key configured")
-    
+        logger.info(f"InferenceClient initialized - model: {self.model}")
+
     async def _complete(
         self,
         prompt: str,
         system_prompt: str = "You are a helpful insurance policy analyst.",
         temperature: float = 0.1,
         max_tokens: int = 2000,
+        timeout: float = 55.0,   # Serverless-safe default: under Vercel's 60s hobby limit
+        max_retries: int = 1,    # Single attempt for chat; callers can override for batch ops
     ) -> str:
-        """
-        Send a completion request to NScale.
-        
-        Args:
-            prompt: User prompt
-            system_prompt: System instructions
-            temperature: Sampling temperature
-            max_tokens: Maximum response tokens
-            
-        Returns:
-            Generated text response
-        """
-        start_time = time.time()
-        prompt_preview = prompt[:200] + "..." if len(prompt) > 200 else prompt
-        
-        logger.debug(f"_complete() called - temp={temperature}, max_tokens={max_tokens}")
-        logger.debug(f"Prompt preview: {prompt_preview}")
-        logger.debug(f"System prompt: {system_prompt[:100]}...")
-        
+        """Send a completion request with optional retry/backoff."""
         payload: dict[str, Any] = {
             "model": self.model,
             "messages": [
@@ -80,277 +66,238 @@ class NScaleClient:
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
-        
-        logger.info(f"Sending NScale request - model={self.model}, temp={temperature}, max_tokens={max_tokens}")
-        logger.debug(f"API endpoint: {self.api_base}/chat/completions")
-        logger.debug(f"API key prefix: {self.api_key[:8]}..." if self.api_key else "No API key")
-        
-        try:
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                logger.debug("HTTP client created, sending POST request...")
-                response = await client.post(
-                    f"{self.api_base}/chat/completions",
-                    headers=self.headers,
-                    json=payload,
+
+        last_error: Exception = Exception("Failed to get response from Inference API")
+
+        for attempt in range(max_retries):
+            if attempt > 0:
+                backoff = 2 ** attempt
+                logger.warning(f"Retry {attempt}/{max_retries} after {backoff}s")
+                await asyncio.sleep(backoff)
+
+            try:
+                logger.info(f"Inference request (attempt {attempt + 1}/{max_retries}) - model={self.model}, timeout={timeout}s")
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    response = await client.post(
+                        f"{self.api_base}/chat/completions",
+                        headers=self.headers,
+                        json=payload,
+                    )
+
+                if response.status_code == 200:
+                    data = response.json()
+                    if "choices" in data and data["choices"]:
+                        content = data["choices"][0]["message"]["content"]
+                        logger.info(f"Response received - {len(content)} chars")
+                        return content
+                    raise Exception(f"Unexpected response format: {list(data.keys())}")
+
+                error_text = response.text[:500] if response.text else "No response body"
+                logger.error(f"Inference API error: {response.status_code} - {error_text}")
+
+                # Never retry on 4xx except 429
+                if 400 <= response.status_code < 500 and response.status_code != 429:
+                    raise Exception(f"Inference API {response.status_code}: {error_text}")
+
+                last_error = Exception(f"Inference API {response.status_code}: {error_text}")
+
+            except (httpx.ConnectTimeout, httpx.ReadTimeout) as e:
+                logger.error(f"Timeout on attempt {attempt + 1}: {type(e).__name__}")
+                last_error = Exception(
+                    f"Inference timed out after {timeout}s. "
+                    "The model may be under load — please try again."
                 )
-                
-                elapsed = time.time() - start_time
-                logger.info(f"NScale response - status={response.status_code}, time={elapsed:.2f}s")
-                
-                if response.status_code != 200:
-                    logger.error(f"NScale API error: {response.status_code} - {response.text[:500]}")
-                    raise Exception(f"NScale API error: {response.status_code} - {response.text}")
-                
-                data = response.json()
-                
-                # Extract response content
-                if "choices" in data and len(data["choices"]) > 0:
-                    content = data["choices"][0]["message"]["content"]
-                    logger.debug(f"Response content length: {len(content)} chars")
-                    logger.debug(f"Response preview: {content[:200]}...")
-                    
-                    # Log token usage if available
-                    if "usage" in data:
-                        usage = data["usage"]
-                        logger.debug(f"Token usage - prompt: {usage.get('prompt_tokens', 'N/A')}, completion: {usage.get('completion_tokens', 'N/A')}")
-                    
-                    logger.info(f"Successfully received response from NScale - {len(content)} chars")
-                    return content
-                else:
-                    logger.error(f"Unexpected response format: {data}")
-                    raise Exception(f"Unexpected NScale response format: {list(data.keys())}")
-                    
-        except httpx.ConnectTimeout:
-            logger.error("Connection timeout to NScale API - check network/firewall")
-            raise Exception("Connection timeout to NScale API")
-        except httpx.HTTPError as e:
-            logger.error(f"HTTP error calling NScale: {type(e).__name__} - {str(e)}")
-            raise
-        except Exception as e:
-            logger.error(f"Error calling NScale: {type(e).__name__} - {str(e)}")
-            raise
-    
-    async def analyze_sneak_peek(
-        self, extracted_text: str, session_id: str
-    ) -> dict[str, Any]:
-        """
-        Generate a sneak peek analysis (free preview).
-        
-        Returns grade band, top risk, and red flag names only.
-        Full details require payment.
-        Uses the dedicated SNEAK_PEEK_PROMPT for rapid pre-audit.
-        """
-        start_time = time.time()
-        logger.info(f"analyze_sneak_peek() - session_id={session_id}, text_length={len(extracted_text)}")
-        logger.debug(f"Using SNEAK_PEEK_PROMPT for analysis")
-        
-        prompt = f"""{SNEAK_PEEK_PROMPT}
+            except httpx.HTTPError as e:
+                logger.error(f"HTTP error on attempt {attempt + 1}: {e}")
+                last_error = e
+            except Exception as e:
+                if any(k in str(e) for k in ("Inference API", "Unexpected response")):
+                    raise  # Already formatted — don't retry
+                logger.error(f"Unexpected error on attempt {attempt + 1}: {e}")
+                last_error = e
 
-Policy text (excerpt for preview):
-{extracted_text[:5000]}...
+        raise last_error
 
-Analysis:"""
-        
+    # ── Sneak peek ───────────────────────────────────────────────────────────
+
+    async def analyze_sneak_peek(self, extracted_text: str, session_id: str) -> dict[str, Any]:
+        """Free preview — grade band, top risk, red flag names only."""
+        logger.info(f"analyze_sneak_peek() - session={session_id}, chars={len(extracted_text)}")
+
+        prompt = (
+            f"{SNEAK_PEEK_PROMPT}\n\n"
+            f"Policy text (excerpt):\n{extracted_text[:5000]}...\n\nAnalysis:"
+        )
+
         try:
-            response_text = await self._complete(
+            raw = await self._complete(
                 prompt=prompt,
                 system_prompt="You are ENZIU, an AI insurance policy auditor. Return ONLY valid JSON. No preamble. No markdown.",
-                temperature=0.1,
                 max_tokens=500,
+                timeout=55.0,
+                max_retries=2,
             )
-            
-            logger.debug(f"Raw response received: {response_text[:200]}...")
-            
-            # Parse JSON response
-            # Remove markdown code blocks if present
-            response_text = response_text.strip()
-            if response_text.startswith("```json"):
-                response_text = response_text[7:]
-            if response_text.endswith("```"):
-                response_text = response_text[:-3]
-            
-            analysis: dict[str, Any] = json.loads(response_text.strip())
-            logger.debug(f"Parsed JSON analysis: {list(analysis.keys())}")
-            
-            result = {
+            analysis: dict[str, Any] = json.loads(
+                raw.strip().removeprefix("```json").removesuffix("```").strip()
+            )
+            return {
                 "grade": {
                     "overall": analysis.get("score_band", "C"),
-                    "clarity": "C",
-                    "coverage": "C",
-                    "claimsEfficiency": "C",
+                    "clarity": analysis.get("clarity_grade", "C"),
+                    "coverage": analysis.get("coverage_grade", "C"),
+                    "claimsEfficiency": analysis.get("claims_efficiency_grade", "C"),
                 },
                 "topRisk": analysis.get("top_risk", "Analysis in progress"),
                 "redFlags": analysis.get("red_flag_names", ["Analysis in progress"])[:3],
                 "summary": analysis.get("one_line", "Full analysis available after payment."),
-                # Additional sneak peek data
                 "score_preview": analysis.get("score_preview", "medium"),
                 "policy_type": analysis.get("policy_type", "other"),
                 "carrier_name": analysis.get("carrier_name"),
             }
-            
-            elapsed = time.time() - start_time
-            logger.info(f"Sneak peek analysis completed - session_id={session_id}, time={elapsed:.2f}s")
-            logger.debug(f"Result: grade={result['grade']['overall']}, policy_type={result['policy_type']}")
-            
-            return result
-        
-        except json.JSONDecodeError as e:
-            logger.error(f"JSON decode error in sneak peek: {str(e)}")
-            logger.debug(f"Response that failed to parse: {response_text[:500]}")
-            # Return placeholder analysis on error
-            return {
-                "grade": {
-                    "overall": "C",
-                    "clarity": "C",
-                    "coverage": "C",
-                    "claimsEfficiency": "C",
-                },
-                "topRisk": "Unable to analyze policy at this time",
-                "redFlags": ["Analysis in progress"],
-                "summary": "Full analysis available after payment.",
-                "score_preview": "medium",
-                "policy_type": "other",
-                "carrier_name": None,
-            }
         except Exception as e:
-            logger.error(f"Error in sneak peek analysis: {type(e).__name__} - {str(e)}")
+            logger.error(f"Sneak peek error: {e}")
             return {
-                "grade": {
-                    "overall": "C",
-                    "clarity": "C",
-                    "coverage": "C",
-                    "claimsEfficiency": "C",
-                },
-                "topRisk": "Unable to analyze policy at this time",
+                "grade": {"overall": "C", "clarity": "C", "coverage": "C", "claimsEfficiency": "C"},
+                "topRisk": "Unable to analyze at this time",
                 "redFlags": ["Analysis in progress"],
                 "summary": "Full analysis available after payment.",
                 "score_preview": "medium",
                 "policy_type": "other",
                 "carrier_name": None,
             }
-    
-    async def analyze_policy(
-        self, extracted_text: str, session_id: str
-    ) -> dict[str, Any]:
-        """
-        Generate full policy analysis (paid feature).
-        
-        Returns complete ENZIU Index with detailed flags and citations.
-        """
-        start_time = time.time()
-        logger.info(f"analyze_policy() - session_id={session_id}, text_length={len(extracted_text)}")
-        logger.debug(f"Using ENZIU_INDEX_PROMPT for full analysis")
-        
-        prompt = f"""{ENZIU_INDEX_PROMPT}
 
-Full policy text:
-{extracted_text}
+    # ── Full analysis ────────────────────────────────────────────────────────
 
-Analysis:"""
-        
+    async def analyze_policy(self, extracted_text: str, session_id: str) -> dict[str, Any]:
+        """Full paid analysis — called from /api/analyze/full which has a 5-min budget."""
+        logger.info(f"analyze_policy() - session={session_id}, chars={len(extracted_text)}")
+
+        prompt = f"{ENZIU_INDEX_PROMPT}\n\nFull policy text:\n{extracted_text}\n\nAnalysis:"
+
         try:
-            response_text = await self._complete(
+            raw = await self._complete(
                 prompt=prompt,
                 system_prompt="You are an insurance policy analyst. Return valid JSON only.",
+                max_tokens=3000,
+                timeout=280.0,   # /api/analyze/full has a 300s client-side abort
+                max_retries=2,
             )
-            
-            logger.debug(f"Raw response received: {response_text[:200]}...")
-            
-            # Parse JSON
-            response_text = response_text.strip()
-            if response_text.startswith("```json"):
-                response_text = response_text[7:]
-            if response_text.endswith("```"):
-                response_text = response_text[:-3]
-            
-            analysis: dict[str, Any] = json.loads(response_text.strip())
-            logger.debug(f"Parsed JSON analysis keys: {list(analysis.keys())}")
-            
-            result = {
-                "grade": analysis.get("grade"),
+            analysis: dict[str, Any] = json.loads(
+                raw.strip().removeprefix("```json").removesuffix("```").strip()
+            )
+            # Normalize grade: if the LLM returned a string like "C", convert it
+            # to the object format the frontend expects: {overall, clarity, coverage, claimsEfficiency}
+            raw_grade = analysis.get("grade")
+            if isinstance(raw_grade, str):
+                normalized_grade = {
+                    "overall": raw_grade,
+                    "clarity": raw_grade,
+                    "coverage": raw_grade,
+                    "claimsEfficiency": raw_grade,
+                }
+            elif isinstance(raw_grade, dict):
+                normalized_grade = {
+                    "overall": raw_grade.get("overall") or raw_grade.get("score_band") or "C",
+                    "clarity": raw_grade.get("clarity") or raw_grade.get("clarity_grade") or "C",
+                    "coverage": raw_grade.get("coverage") or raw_grade.get("coverage_grade") or "C",
+                    "claimsEfficiency": raw_grade.get("claimsEfficiency") or raw_grade.get("claims_efficiency_grade") or "C",
+                }
+            else:
+                normalized_grade = {"overall": "C", "clarity": "C", "coverage": "C", "claimsEfficiency": "C"}
+
+            return {
+                "grade": normalized_grade,
                 "topRisk": analysis.get("topRisk"),
-                "redFlags": [
-                    flag.get("name", "Unknown")
-                    for flag in analysis.get("redFlags", [])
-                ],
+                "redFlags": [f.get("name", "Unknown") for f in analysis.get("redFlags", [])],
                 "summary": analysis.get("summary"),
                 "detailedFlags": analysis.get("redFlags", []),
             }
-            
-            elapsed = time.time() - start_time
-            logger.info(f"Full policy analysis completed - session_id={session_id}, time={elapsed:.2f}s, flags={len(result['redFlags'])}")
-            
-            return result
-        
-        except json.JSONDecodeError as e:
-            logger.error(f"JSON decode error in policy analysis: {str(e)}")
-            return {
-                "grade": {
-                    "overall": "C",
-                    "clarity": "C",
-                    "coverage": "C",
-                    "claimsEfficiency": "C",
-                },
-                "topRisk": "Analysis error",
-                "redFlags": [],
-                "summary": "Unable to complete analysis.",
-            }
         except Exception as e:
-            logger.error(f"Error in policy analysis: {type(e).__name__} - {str(e)}")
+            logger.error(f"Policy analysis error: {e}")
             return {
-                "grade": {
-                    "overall": "C",
-                    "clarity": "C",
-                    "coverage": "C",
-                    "claimsEfficiency": "C",
-                },
+                "grade": {"overall": "C", "clarity": "C", "coverage": "C", "claimsEfficiency": "C"},
                 "topRisk": "Analysis error",
                 "redFlags": [],
                 "summary": "Unable to complete analysis.",
             }
-    
-    async def chat(
-        self, session_id: str, message: str
-    ) -> dict[str, Any]:
+
+    # ── Chat ─────────────────────────────────────────────────────────────────
+
+    async def chat(self, session_id: str, message: str, policy_text: str = "") -> dict[str, Any]:
         """
-        Deep Dive Q&A for a single policy.
+        Deep Dive Q&A.
+        Sends the full policy text to the LLM so it can search every page.
+        Parses the LLM JSON response and returns a human-readable prose message
+        plus the page number and excerpt for PDF viewer navigation.
+        Raises ValueError (→ HTTP 400) if policy_text is missing so the client
+        knows to restore from IndexedDB rather than getting a silent 500.
         """
-        start_time = time.time()
-        logger.info(f"chat() - session_id={session_id}, message_length={len(message)}")
-        logger.debug(f"Chat message: {message[:200]}...")
-        
-        # Retrieve session data (in production, fetch from Redis)
-        policy_text = ""  # Would be retrieved from session storage
-        
+        if not policy_text or len(policy_text.strip()) < 50:
+            raise ValueError(
+                "Policy text is missing. Please re-upload your PDF — "
+                "the extracted text was not found in this session."
+            )
+
+        logger.info(f"chat() - session={session_id}, policy_chars={len(policy_text)}")
+
+        # Send the FULL policy text (up to 100k chars) so the LLM can read the whole document
         prompt = DEEP_DIVE_PROMPT.format(
-            policy_text=policy_text[:8000] if policy_text else "[Policy text]",
+            policy_text=policy_text[:100000],
             question=message,
         )
-        
-        response = await self._complete(
+
+        # Single attempt, tight timeout — serverless functions must respond quickly
+        raw = await self._complete(
             prompt=prompt,
             system_prompt="You are an insurance policy analyst. Always cite page numbers.",
+            max_tokens=800,
+            timeout=55.0,
+            max_retries=1,
         )
-        
-        # Extract page number if mentioned
+
+        # Parse the LLM's JSON response
         page: int | None = None
-        if "page " in response.lower():
-            try:
-                page_str = response.lower().split("page ")[1].split()[0]
-                page = int("".join(filter(str.isdigit, page_str)))
-                logger.debug(f"Extracted page number: {page}")
-            except (IndexError, ValueError):
-                logger.debug("No page number found in response")
-        
-        elapsed = time.time() - start_time
-        logger.info(f"Chat response generated - session_id={session_id}, time={elapsed:.2f}s, response_length={len(response)}")
-        
+        response_text: str = raw
+        excerpt: str | None = None
+        try:
+            cleaned = raw.strip().removeprefix("```json").removesuffix("```").strip()
+            data = json.loads(cleaned)
+            found = data.get("found", False)
+            page = data.get("page_number") or None
+            excerpt = data.get("exact_excerpt") or None
+
+            if found and data.get("plain_english_explanation"):
+                # Use the LLM's prose explanation as the response
+                explanation = data["plain_english_explanation"]
+                section = data.get("section_title") or ""
+                section_prefix = f" ({section})" if section else ""
+                response_text = (
+                    f"{explanation}\n\n"
+                    f"**Source:** Page {page}{section_prefix}"
+                    if page
+                    else explanation
+                )
+            elif not found:
+                reason = data.get("not_found_reason") or "I couldn't find this information in the policy document."
+                response_text = reason
+            else:
+                # Fallback: if the LLM returned found=true but no explanation, use the excerpt
+                quote = data.get("exact_excerpt") or ""
+                response_text = f"The policy states on page {page}: \"{quote}\"" if page and quote else raw
+        except (json.JSONDecodeError, Exception) as e:
+            logger.warning(f"Failed to parse LLM JSON response: {e}")
+            # Fallback: return the raw response as-is
+            response_text = raw
+
         return {
-            "response": response,
+            "response": response_text,
             "page": page,
-            "disclaimer": "page X — not legal advice",
+            "excerpt": excerpt,
+            "disclaimer": "Not legal advice — page citations are approximate",
         }
-    
+
+    # ── Compare ──────────────────────────────────────────────────────────────
+
     async def compare(
         self,
         session_id: str,
@@ -358,13 +305,7 @@ Analysis:"""
         policyA: dict[str, Any],
         policyB: dict[str, Any],
     ) -> dict[str, Any]:
-        """
-        Comparative analysis for broker mode.
-        """
-        start_time = time.time()
-        logger.info(f"compare() - session_id={session_id}, gradeA={policyA.get('grade', {}).get('overall', 'Unknown')}, gradeB={policyB.get('grade', {}).get('overall', 'Unknown')}")
-        logger.debug(f"Comparison question: {message[:200]}...")
-        
+        """Comparative analysis for broker mode."""
         prompt = COMPARE_PROMPT.format(
             gradeA=policyA.get("grade", {}).get("overall", "Unknown"),
             summaryA=policyA.get("summary", ""),
@@ -372,33 +313,25 @@ Analysis:"""
             summaryB=policyB.get("summary", ""),
             question=message,
         )
-        
         response = await self._complete(
             prompt=prompt,
             system_prompt="You are an insurance policy analyst comparing two policies.",
+            max_tokens=800,
+            timeout=55.0,
+            max_retries=1,
         )
-        
-        elapsed = time.time() - start_time
-        logger.info(f"Comparison completed - session_id={session_id}, time={elapsed:.2f}s, response_length={len(response)}")
-        
-        return {
-            "response": response,
-            "disclaimer": "page X — not legal advice",
-        }
-    
+        return {"response": response, "disclaimer": "Not legal advice"}
+
+    # ── Session stubs ────────────────────────────────────────────────────────
+
     async def store_session(self, session_id: str, data: dict[str, Any]) -> None:
-        """
-        Store session data in Redis.
-        
-        In development mode, this is a no-op.
-        In production, stores to Upstash Redis.
-        """
-        # TODO: Implement Redis storage
-        pass
-    
+        pass  # TODO: Upstash Redis
+
+    async def mark_session_paid(self, session_id: str) -> None:
+        logger.info(f"Session marked as paid: {session_id}")
+
+    async def check_session_payment(self, session_id: str) -> bool:
+        return False  # TODO: Upstash Redis
+
     async def end_session(self, session_id: str) -> None:
-        """
-        End session and wipe all data.
-        """
-        # TODO: Implement Redis session deletion
-        pass
+        pass  # TODO: Upstash Redis

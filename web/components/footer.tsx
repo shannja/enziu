@@ -3,12 +3,28 @@
 import { motion } from "framer-motion";
 import Link from "next/link";
 import { useMode } from "@/context/ModeContext";
+import { useState, useEffect } from "react";
 
 export function Footer() {
   const currentYear = new Date().getFullYear();
   const { mode } = useMode();
+  const [shouldHide, setShouldHide] = useState(false);
   
   const isCustomerMode = mode === "customer";
+
+  // Listen for hide events from child components
+  useEffect(() => {
+    const handleHideToggle = (event: CustomEvent) => {
+      setShouldHide(!!event.detail?.hide);
+    };
+
+    window.addEventListener("enziu-hide-footer", handleHideToggle as EventListener);
+    return () => window.removeEventListener("enziu-hide-footer", handleHideToggle as EventListener);
+  }, []);
+
+  if (shouldHide) {
+    return null;
+  }
 
   return (
     <motion.footer

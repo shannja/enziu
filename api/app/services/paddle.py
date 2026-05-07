@@ -24,8 +24,8 @@ from ..config import settings, MIN_PASSPHRASE_LENGTH, PRICE_ID_PREFIX, TRANSACTI
 
 if TYPE_CHECKING:
     from .voucher import VoucherService
+    from .inference import InferenceClient
 
-# Configure logger
 logger = logging.getLogger("paddle")
 logger.setLevel(logging.DEBUG if settings.debug else logging.INFO)
 
@@ -39,7 +39,7 @@ PADDLE_API_BASE = (
     else "https://api.paddle.com"
 )
 
-VALID_TRANSACTION_STATUSES = ("completed", "billed")
+VALID_TRANSACTION_STATUSES = ("completed", "billed", "paid")
 
 # ---------------------------------------------------------------------------
 # Schemas
@@ -58,13 +58,11 @@ class CreateTransactionResponse(BaseModel):
 class VerifyPaymentRequest(BaseModel):
     transaction_id: str
     session_id: str
-    passphrase: str
 
 
 class VerifyPaymentResponse(BaseModel):
-    voucher_code: str
-    credits: int
-    pack_type: str
+    success: bool
+    session_id: str
 
 
 # ---------------------------------------------------------------------------
@@ -74,78 +72,54 @@ class VerifyPaymentResponse(BaseModel):
 class PaddleService:
     """
     Service for interacting with Paddle Billing API.
-    
-    Handles transaction creation, payment verification, and webhook processing.
-    Delegates voucher creation to VoucherService after successful payment verification.
     """
-    
-    def __init__(self, voucher_service: "VoucherService") -> None:
-        """
-        Initialize PaddleService.
-        
-        Args:
-            voucher_service: VoucherService instance for voucher operations
-        """
+
+    def __init__(self, voucher_service: "VoucherService", inference_client: "InferenceClient | None" = None) -> None:
         self.voucher_service = voucher_service
+        self.inference_client = inference_client
         self.api_base = PADDLE_API_BASE
-        logger.info(
-            "PaddleService initialized - API base: %s",
-            self.api_base
-        )
-    
+        logger.info("PaddleService initialized - API base: %s", self.api_base)
+
     def _auth_headers(self) -> dict[str, str]:
-        """
-        Get authentication headers for Paddle API requests.
-        
-        Returns:
-            Dictionary with Authorization and Content-Type headers
-        """
         return {
             "Authorization": f"Bearer {settings.paddle_api_key}",
             "Content-Type": "application/json",
         }
-    
+
     def _verify_webhook_signature(self, body: bytes, signature_header: str) -> bool:
         """
-        Verify a Paddle webhook signature.
-        
-        Paddle signs webhooks with HMAC-SHA256. The Paddle-Signature header
-        contains a timestamp and the hex digest joined by semicolons:
-            ts=<timestamp>;h1=<hex_digest>
-        
-        Args:
-            body: Raw request body bytes
-            signature_header: Paddle-Signature header value
-            
-        Returns:
-            True if signature is valid, False otherwise
+        Verify a Paddle webhook signature (HMAC-SHA256).
+
+        Paddle-Signature format:  ts=<timestamp>;h1=<hex_digest>
+        Signed payload:           <timestamp>:<raw_body>
         """
         try:
             parts = dict(p.split("=", 1) for p in signature_header.split(";"))
             ts = parts.get("ts", "")
             h1 = parts.get("h1", "")
-            
-            signed_payload = f"{ts}:{body.decode()}"
-            expected = hmac.new(
-                settings.paddle_webhook_secret.encode(),
-                signed_payload.encode(),
+
+            if not ts or not h1:
+                logger.warning("Malformed Paddle-Signature header")
+                return False
+
+            signed_payload = f"{ts}:{body.decode('utf-8')}".encode("utf-8")
+
+            # Use hmac.new with explicit digestmod (required in Python 3.8+, avoids deprecation)
+            mac = hmac.new(
+                settings.paddle_webhook_secret.encode("utf-8"),
+                signed_payload,
                 hashlib.sha256,
-            ).hexdigest()
-            
+            )
+            expected = mac.hexdigest()
+
             return hmac.compare_digest(expected, h1)
         except Exception as exc:
             logger.error("Signature verification error: %s", exc)
             return False
-    
+
     def get_router(self) -> APIRouter:
-        """
-        Get the FastAPI router with all Paddle routes.
-        
-        Returns:
-            APIRouter configured with Paddle endpoints
-        """
         router = APIRouter(prefix="/api/paddle", tags=["paddle"])
-        
+
         @router.post(
             "/transaction",
             response_model=CreateTransactionResponse,
@@ -154,35 +128,22 @@ class PaddleService:
         async def create_transaction(body: CreateTransactionRequest) -> CreateTransactionResponse:
             """
             Create a Paddle transaction server-side and return its ID to the frontend.
-            
-            The frontend passes the returned transaction_id to:
-                Paddle.Checkout.open({ transactionId })
-            
-            This avoids the 400 errors that occur when price IDs are resolved
-            client-side via Paddle's /paddlejs endpoint.
+            Frontend passes the returned transaction_id to Paddle.Checkout.open({ transactionId }).
             """
-            # Validate price_id format
             if not body.price_id.startswith(PRICE_ID_PREFIX):
-                logger.warning(
-                    "Invalid price_id format: %s",
-                    body.price_id[:20] if len(body.price_id) > 20 else body.price_id
-                )
+                logger.warning("Invalid price_id format: %s", body.price_id[:20])
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="Invalid price_id — must start with 'pri_'",
                 )
-            
-            # Validate pack_type
+
             if body.pack_type not in VALID_PACK_TYPES:
-                logger.warning(
-                    "Invalid pack_type: %s",
-                    body.pack_type
-                )
+                logger.warning("Invalid pack_type: %s", body.pack_type)
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="Invalid pack_type",
                 )
-            
+
             payload = {
                 "items": [{"price_id": body.price_id, "quantity": 1}],
                 "custom_data": {
@@ -190,7 +151,7 @@ class PaddleService:
                     "pack_type": body.pack_type,
                 },
             }
-            
+
             try:
                 async with httpx.AsyncClient(timeout=15) as client:
                     resp = await client.post(
@@ -200,71 +161,37 @@ class PaddleService:
                     )
             except httpx.RequestError as exc:
                 logger.error("Paddle API unreachable: %s", exc)
-                raise HTTPException(
-                    status_code=status.HTTP_502_BAD_GATEWAY,
-                    detail="Could not reach Paddle API",
-                )
-            
+                raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Could not reach Paddle API")
+
             if resp.status_code != 201:
-                logger.error(
-                    "Paddle transaction creation failed: %s — %s",
-                    resp.status_code,
-                    resp.text[:200] if len(resp.text) > 200 else resp.text,
-                )
+                logger.error("Paddle transaction creation failed: %s — %s", resp.status_code, resp.text[:200])
                 raise HTTPException(
                     status_code=status.HTTP_502_BAD_GATEWAY,
                     detail=f"Paddle returned {resp.status_code}: {resp.text}",
                 )
-            
+
             transaction_id: str = resp.json()["data"]["id"]
-            logger.info(
-                "Transaction created — id=%s session=%s pack=%s",
-                transaction_id,
-                body.session_id,
-                body.pack_type,
-            )
+            logger.info("Transaction created — id=%s session=%s pack=%s", transaction_id, body.session_id, body.pack_type)
             return CreateTransactionResponse(transaction_id=transaction_id)
-        
-        
+
+
         @router.post(
             "/verify",
             response_model=VerifyPaymentResponse,
-            summary="Verify a completed Paddle transaction and issue a voucher",
+            summary="Verify a completed Paddle transaction and mark session as paid",
         )
         async def verify_payment(body: VerifyPaymentRequest) -> VerifyPaymentResponse:
             """
             Called by the frontend when the checkout.completed event fires.
-            
-            1. Validates the transaction_id format.
-            2. Fetches the transaction from Paddle to confirm status is
-               'completed' (sandbox) or 'billed' (production).
-            3. Delegates voucher creation entirely to VoucherService —
-               Paddle code never touches voucher logic directly.
+            Verifies the transaction with Paddle and marks the session as paid.
+
+            The frontend is responsible for calling Paddle.Checkout.close() after
+            this endpoint returns success=True.
             """
-            # Validate transaction_id format
             if not body.transaction_id.startswith(TRANSACTION_ID_PREFIX):
-                logger.warning(
-                    "Invalid transaction_id format: %s",
-                    body.transaction_id[:20] if len(body.transaction_id) > 20 else body.transaction_id
-                )
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Invalid transaction_id",
-                )
-            
-            # Validate passphrase length
-            if len(body.passphrase) < MIN_PASSPHRASE_LENGTH:
-                logger.warning(
-                    "Passphrase too short: %d characters (minimum %d)",
-                    len(body.passphrase),
-                    MIN_PASSPHRASE_LENGTH
-                )
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Passphrase must be at least 8 characters",
-                )
-            
-            # Fetch transaction from Paddle to confirm it is paid
+                logger.warning("Invalid transaction_id format: %s", body.transaction_id[:20])
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid transaction_id")
+
             try:
                 async with httpx.AsyncClient(timeout=15) as client:
                     resp = await client.get(
@@ -273,59 +200,43 @@ class PaddleService:
                     )
             except httpx.RequestError as exc:
                 logger.error("Paddle API unreachable: %s", exc)
-                raise HTTPException(
-                    status_code=status.HTTP_502_BAD_GATEWAY,
-                    detail="Could not reach Paddle API",
-                )
-            
+                raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Could not reach Paddle API")
+
             if resp.status_code != 200:
-                logger.error(
-                    "Paddle transaction fetch failed: %s — %s",
-                    resp.status_code,
-                    resp.text[:200] if len(resp.text) > 200 else resp.text,
-                )
-                raise HTTPException(
-                    status_code=status.HTTP_502_BAD_GATEWAY,
-                    detail=f"Paddle returned {resp.status_code}",
-                )
-            
+                logger.error("Paddle transaction fetch failed: %s — %s", resp.status_code, resp.text[:200])
+                raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Paddle returned {resp.status_code}")
+
             txn = resp.json()["data"]
             txn_status: str = txn.get("status", "")
-            pack_type: str = (txn.get("custom_data") or {}).get("pack_type", "PAYG")
-            
-            # 'completed' = sandbox, 'billed' = production one-time charge
+
             if txn_status not in VALID_TRANSACTION_STATUSES:
-                logger.warning(
-                    "Transaction %s has unexpected status: %s",
-                    body.transaction_id,
-                    txn_status,
-                )
-                raise HTTPException(
-                    status_code=status.HTTP_402_PAYMENT_REQUIRED,
-                    detail=f"Transaction not completed (status='{txn_status}')",
-                )
-            
-            # Delegate entirely to VoucherService — no voucher logic here
-            voucher = await self.voucher_service.create_voucher(
-                pack_type=pack_type,
-                passphrase=body.passphrase,
-                transaction_id=body.transaction_id,
-            )
-            
-            logger.info(
-                "Voucher issued — code=%s... txn=%s session=%s",
-                voucher["code"][:8],
-                body.transaction_id,
-                body.session_id,
-            )
-            
-            return VerifyPaymentResponse(
-                voucher_code=voucher["code"],
-                credits=voucher["credits"],
-                pack_type=voucher["pack_type"],
-            )
-        
-        
+                logger.warning("Transaction %s has unexpected status: %s", body.transaction_id, txn_status)
+
+                status_messages = {
+                    "pending": "Transaction is still pending. Please complete the payment.",
+                    "ready":   "Transaction is still being processed.",
+                    "draft":   "Transaction is still a draft.",
+                    "canceled": "Transaction was canceled. Please start a new payment.",
+                    "expired":  "Transaction has expired. Please start a new payment.",
+                }
+                detail = status_messages.get(txn_status, f"Transaction not completed (status='{txn_status}'). Please try again.")
+                raise HTTPException(status_code=status.HTTP_402_PAYMENT_REQUIRED, detail=detail)
+
+            # Mark session as paid in Redis
+            if self.inference_client:
+                try:
+                    await self.inference_client.mark_session_paid(body.session_id)
+                    logger.info("Session marked as paid — session=%s txn=%s", body.session_id, body.transaction_id)
+                except Exception as e:
+                    logger.error("Failed to mark session as paid: %s", e)
+                    # Non-fatal — payment is verified, continue
+            else:
+                logger.warning("InferenceClient not configured — session not marked as paid")
+
+            # NOTE: The frontend must call Paddle.Checkout.close() upon receiving success=True.
+            return VerifyPaymentResponse(success=True, session_id=body.session_id)
+
+
         @router.post(
             "/webhook",
             summary="Receive Paddle webhook events",
@@ -337,64 +248,50 @@ class PaddleService:
         ) -> JSONResponse:
             """
             Paddle sends signed webhook events for payment lifecycle changes.
-            Used in production as a reliable backup to the client-side checkout.completed event.
-            
+            Reliable production backup to the client-side checkout.completed event.
+
             Verified events:
-            - transaction.completed → issue voucher if not already issued
-            - transaction.payment_failed → log for monitoring
-            
-            Signature verification uses HMAC-SHA256 with the webhook secret.
+              transaction.completed → mark session as paid
+              transaction.payment_failed → logged for monitoring
             """
             raw_body = await request.body()
-            
-            # Verify webhook signature in production
+
             if not settings.debug and settings.paddle_webhook_secret:
                 if not paddle_signature:
                     logger.warning("Webhook received with no signature")
-                    raise HTTPException(
-                        status_code=status.HTTP_401_UNAUTHORIZED,
-                        detail="Missing Paddle-Signature header",
-                    )
-                
+                    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing Paddle-Signature header")
+
                 if not self._verify_webhook_signature(raw_body, paddle_signature):
                     logger.warning("Webhook signature verification failed")
-                    raise HTTPException(
-                        status_code=status.HTTP_403_FORBIDDEN,
-                        detail="Invalid webhook signature",
-                    )
-            
+                    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid webhook signature")
+
             try:
                 event = await request.json()
             except Exception:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Invalid JSON body",
-                )
-            
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JSON body")
+
             event_type: str = event.get("event_type", "")
             logger.info("Paddle webhook received: %s", event_type)
-            
+
             if event_type == "transaction.completed":
                 txn = event.get("data", {})
                 txn_id: str = txn.get("id", "")
                 custom_data: dict = txn.get("custom_data") or {}
-                pack_type: str = custom_data.get("pack_type", "PAYG")
-                
-                # Webhooks don't carry the passphrase — voucher issuance via webhook
-                # is only a fallback for cases where the client event was missed.
-                # In production, you would look up the passphrase hash from a
-                # pending-payment table keyed by transaction_id.
-                logger.info(
-                    "transaction.completed webhook — txn=%s pack=%s "
-                    "(client-side verify is primary; webhook is backup)",
-                    txn_id,
-                    pack_type,
-                )
-            
+                session_id: str = custom_data.get("session_id", "")
+
+                if session_id and self.inference_client:
+                    try:
+                        await self.inference_client.mark_session_paid(session_id)
+                        logger.info("Session marked as paid via webhook — session=%s txn=%s", session_id, txn_id)
+                    except Exception as e:
+                        logger.error("Failed to mark session as paid via webhook: %s", e)
+                elif not session_id:
+                    logger.warning("transaction.completed webhook without session_id — txn=%s", txn_id)
+
             elif event_type == "transaction.payment_failed":
                 txn_id = event.get("data", {}).get("id", "unknown")
                 logger.warning("Payment failed — txn=%s", txn_id)
-            
+
             return JSONResponse(content={"status": "received"})
-        
+
         return router

@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Send, FileText, AlertCircle } from "lucide-react";
 import type { ChatMessage } from "@/types";
+import { getText, getFactSheet } from "@/lib/pdf-storage";
 
 interface DeepDiveChatProps {
   sessionId: string;
@@ -44,6 +45,58 @@ export function DeepDiveChat({ sessionId, onChatComplete }: DeepDiveChatProps) {
     setChatsRemaining((prev) => prev - 1);
 
     try {
+      // Try to get fact sheet first (preferred)
+      const factSheet = await getFactSheet(sessionId);
+      
+      // If we have a fact sheet, use it for the chat
+      if (factSheet) {
+        console.log('[DeepDiveChat] Using fact sheet for chat');
+        
+        const response = await fetch(`/api/chat`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            session_id: sessionId,
+            message: userMessage.content,
+            fact_sheet: factSheet,
+          }),
+        });
+        
+        if (!response.ok) throw new Error("Chat failed");
+        
+        const data = await response.json();
+        
+        const assistantMessage: ChatMessage = {
+          role: "assistant",
+          content: data.response,
+          page: data.page,
+          disclaimer: data.disclaimer || "page X — not legal advice",
+        };
+        
+        // Store excerpt for potential PDF viewer navigation
+        if (data.excerpt) {
+          sessionStorage.setItem("enziu_last_excerpt", data.excerpt);
+        }
+        
+        setMessages((prev) => [...prev, assistantMessage]);
+        return;
+      }
+      
+      // Fallback: Use extracted text if no fact sheet
+      console.log('[DeepDiveChat] No fact sheet found, falling back to extracted text');
+      
+      // Gold-Handoff: Get extracted text from sessionStorage or IndexedDB
+      let extractedText = sessionStorage.getItem("enziu_vault");
+      if (!extractedText) {
+        extractedText = await getText(sessionId);
+      }
+      
+      if (!extractedText) {
+        throw new Error("No policy text found. Please re-upload your PDF.");
+      }
+
       const response = await fetch(`/api/chat`, {
         method: "POST",
         headers: {
@@ -52,6 +105,7 @@ export function DeepDiveChat({ sessionId, onChatComplete }: DeepDiveChatProps) {
         body: JSON.stringify({
           session_id: sessionId,
           message: userMessage.content,
+          extracted_text: extractedText,
         }),
       });
 
@@ -65,6 +119,11 @@ export function DeepDiveChat({ sessionId, onChatComplete }: DeepDiveChatProps) {
         page: data.page,
         disclaimer: data.disclaimer || "page X — not legal advice",
       };
+
+      // Store excerpt for potential PDF viewer navigation
+      if (data.excerpt) {
+        sessionStorage.setItem("enziu_last_excerpt", data.excerpt);
+      }
 
       setMessages((prev) => [...prev, assistantMessage]);
     } catch (error) {
@@ -83,7 +142,7 @@ export function DeepDiveChat({ sessionId, onChatComplete }: DeepDiveChatProps) {
   return (
     <Card className="border-border bg-card/50 mt-8">
       <CardHeader>
-        <CardTitle className="text-lg text-white flex items-center justify-between">
+        <CardTitle className="text-lg text-foreground flex items-center justify-between">
           <span className="flex items-center gap-2">
             <FileText className="w-5 h-5 text-brand-amber" />
             Deep Dive Q&A

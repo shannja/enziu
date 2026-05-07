@@ -22,6 +22,12 @@ export interface AnalysisResult {
   summary: string;
   detailedFlags?: RedFlag[];
   clauses?: Clause[];
+  // Fields returned by the /api/extract sneak-peek endpoint
+  extracted_text?: string;
+  score_preview?: "low" | "medium" | "high";
+  policy_type?: string;
+  carrier_name?: string | null;
+  is_scanned?: boolean;
 }
 
 export interface Clause {
@@ -48,6 +54,7 @@ export interface ChatRequest {
 export interface ChatResponse {
   response: string;
   page?: number;
+  excerpt?: string;
   disclaimer: string;
 }
 

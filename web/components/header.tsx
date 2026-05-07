@@ -12,9 +12,10 @@ type Mode = "customer" | "broker";
 interface HeaderProps {
   mode: Mode;
   onModeChange: (mode: Mode) => void;
+  hideToggle?: boolean; // Hide the customer/broker toggle
 }
 
-export function Header({ mode, onModeChange }: HeaderProps) {
+export function Header({ mode, onModeChange, hideToggle = false }: HeaderProps) {
   const { theme, setTheme, actualTheme } = useTheme();
 
   const toggleTheme = () => {
@@ -23,7 +24,7 @@ export function Header({ mode, onModeChange }: HeaderProps) {
 
   const modes: Array<{ value: Mode; label: string }> = [
     { value: "customer", label: "Customer" },
-    { value: "broker", label: "Broker" },
+    // TODO: Put it back{ value: "broker", label: "Broker" },
   ];
 
   return (
@@ -33,7 +34,10 @@ export function Header({ mode, onModeChange }: HeaderProps) {
       transition={{ duration: 0.4, ease: "easeOut" }}
       className="sticky top-0 z-50 w-full border-b border-border bg-background backdrop-blur supports-[backdrop-filter]:bg-background/80"
     >
-      <div className="container mx-auto px-4 py-3 md:py-0 md:h-16 flex flex-col items-center gap-4 md:grid md:grid-cols-3 md:gap-0">
+      <div className={cn(
+        "container mx-auto px-4 py-3 md:py-0 md:h-16 flex flex-col items-center gap-4 md:grid md:gap-0",
+        hideToggle ? "md:grid-cols-2" : "md:grid-cols-3"
+      )}>
         
         {/* Logo Section - Top on Mobile, Left on Desktop */}
         <motion.div
@@ -42,7 +46,11 @@ export function Header({ mode, onModeChange }: HeaderProps) {
           transition={{ duration: 0.4, delay: 0.1, ease: "easeOut" }}
           className="flex justify-center md:justify-start"
         >
-          <Link href="/" className="flex items-center gap-2 group">
+          <button
+            onClick={() => window.dispatchEvent(new CustomEvent("enziu-reset"))}
+            className="flex items-center gap-2 group cursor-pointer"
+            title="Return to home"
+          >
             <Image
               src={actualTheme === "dark" ? "/logos/logo-dark.png" : "/logos/logo-light.png"}
               alt="Enziu"
@@ -51,38 +59,43 @@ export function Header({ mode, onModeChange }: HeaderProps) {
               className="h-8 w-auto"
               priority
             />
-          </Link>
+          </button>
         </motion.div>
 
-        {/* Mode Toggle - Bottom on Mobile, Center on Desktop */}
-        <motion.nav
-          initial={{ scale: 0.95, opacity: 0 }}
-          animate={{ scale: 1, opacity: 1 }}
-          transition={{ duration: 0.4, delay: 0.15, ease: "easeOut" }}
-          className="flex items-center gap-1 bg-secondary rounded-full p-1 border border-border/50 md:justify-self-center"
-        >
-          {modes.map((m) => (
-            <button
-              key={m.value}
-              onClick={() => onModeChange(m.value)}
-              className={cn(
-                "px-6 py-1.5 md:px-5 md:py-2 text-xs md:text-sm font-medium rounded-full transition-all duration-200",
-                mode === m.value
-                  ? "bg-gradient-to-r from-[#ffde59] to-[#ff914d] text-black shadow-sm"
-                  : "text-muted-foreground hover:text-foreground"
-              )}
-            >
-              {m.label}
-            </button>
-          ))}
-        </motion.nav>
+        {/* Mode Toggle - Hidden when hideToggle is true */}
+        {!hideToggle && (
+          <motion.nav
+            initial={{ scale: 0.95, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            transition={{ duration: 0.4, delay: 0.15, ease: "easeOut" }}
+            className="flex items-center gap-1 bg-secondary rounded-full p-1 border border-border/50 md:justify-self-center"
+          >
+            {modes.map((m) => (
+              <button
+                key={m.value}
+                onClick={() => onModeChange(m.value)}
+                className={cn(
+                  "px-6 py-1.5 md:px-5 md:py-2 text-xs md:text-sm font-medium rounded-full transition-all duration-200",
+                  mode === m.value
+                    ? "bg-gradient-to-r from-[#ffde59] to-[#ff914d] text-black shadow-sm"
+                    : "text-muted-foreground hover:text-foreground"
+                )}
+              >
+                {m.label}
+              </button>
+            ))}
+          </motion.nav>
+        )}
 
-        {/* Theme Toggle - Hidden on Mobile, Right on Desktop */}
+        {/* Theme Toggle - Right aligned, always visible on desktop */}
         <motion.div 
           initial={{ x: 20, opacity: 0 }}
           animate={{ x: 0, opacity: 1 }}
           transition={{ duration: 0.4, delay: 0.1, ease: "easeOut" }}
-          className="hidden md:flex justify-end"
+          className={cn(
+            "hidden md:flex",
+            hideToggle ? "justify-end" : "justify-end"
+          )}
         >
           <button
             onClick={toggleTheme}

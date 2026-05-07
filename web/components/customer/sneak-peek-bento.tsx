@@ -3,7 +3,9 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { AlertTriangle, Shield, FileText, ArrowRight } from "lucide-react";
 import { cn, getGradeColor } from "@/lib/utils";
+import { useTheme } from "@/context/ThemeContext";
 import { motion } from "framer-motion";
+import Image from "next/image";
 import type { AnalysisResult } from "@/types";
 
 interface SneakPeekBentoProps {
@@ -35,6 +37,7 @@ const itemVariants = {
 
 export function SneakPeekBento({ result }: SneakPeekBentoProps) {
   const { grade, topRisk, redFlags, summary } = result;
+  const { actualTheme } = useTheme();
 
   return (
     <motion.div
@@ -49,11 +52,19 @@ export function SneakPeekBento({ result }: SneakPeekBentoProps) {
         transition={{ duration: 0.4, delay: 0.1 }}
         className="text-center mb-8"
       >
-        <h2 className="text-2xl font-bold mb-2">
-          Sneak Peek — Your Policy Snapshot
+        <h2 className="text-2xl font-bold mb-4">
+          Here's what we found based on the
         </h2>
-        <p className="text-muted-foreground">
-          Here's what we found. Pay to unlock the full analysis with page citations.
+        <div className="flex items-center justify-center gap-3 mb-2">
+          <Image
+            src={actualTheme === "dark" ? "/logos/index-dark.png" : "/logos/index-light.png"}
+            alt="Enziu Index"
+            width={512}
+            height={512}
+          />
+        </div>
+        <p className="text-muted-foreground text-sm">
+          We've scanned the document and identified potential vulnerabilities. Here is your baseline grade.
         </p>
       </motion.div>
 
@@ -75,7 +86,7 @@ export function SneakPeekBento({ result }: SneakPeekBentoProps) {
             <CardContent>
               <div
                 className={cn(
-                  "text-6xl font-bold",
+                  "text-6xl font-bold text-gradient",
                   getGradeColor(grade.overall)
                 )}
               >

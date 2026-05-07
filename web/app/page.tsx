@@ -1,5 +1,6 @@
 "use client";
 
+import { useState, useEffect } from "react";
 import { Header } from "@/components/header";
 import { Footer } from "@/components/footer";
 import { CustomerMode } from "@/components/customer/customer-mode";
@@ -9,10 +10,22 @@ import { useMode } from "@/context/ModeContext";
 
 export default function Home() {
   const { mode, setMode } = useMode();
+  const [hideToggle, setHideToggle] = useState(false);
+
+  useEffect(() => {
+    const handleToggleChange = (event: CustomEvent<{ hide: boolean }>) => {
+      setHideToggle(event.detail.hide);
+    };
+
+    window.addEventListener("enziu-hide-toggle", handleToggleChange as EventListener);
+    return () => {
+      window.removeEventListener("enziu-hide-toggle", handleToggleChange as EventListener);
+    };
+  }, []);
 
   return (
     <main className="min-h-screen bg-background">
-      <Header mode={mode} onModeChange={setMode} />
+      <Header mode={mode} onModeChange={setMode} hideToggle={hideToggle} />
       
       <motion.div
         initial={{ opacity: 0, y: 20 }}

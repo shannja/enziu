@@ -34,7 +34,7 @@ const objectSans = localFont({
 });
 
 export const metadata: Metadata = {
-  title: "Enziu - Insurance Policy Analysis",
+  title: "Enziu",
   description: "Understand what you actually bought. Upload your insurance policy and get instant, plain-English analysis.",
   icons: {
     icon: '/logos/mark.png',

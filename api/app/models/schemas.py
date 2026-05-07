@@ -6,7 +6,7 @@ All request/response models for the API.
 from __future__ import annotations
 
 from pydantic import BaseModel, Field
-from typing import Optional, Literal
+from typing import Optional, Literal, Dict, List, Any
 
 
 # ===========================================
@@ -64,6 +64,66 @@ class UploadResponse(BaseModel):
 
 
 # ===========================================
+# Fact Sheet Models
+# ===========================================
+
+class LiabilityLimit(BaseModel):
+    """Liability limit with page citation."""
+    description: str
+    amount: str
+    page: int
+
+
+class Exclusion(BaseModel):
+    """Policy exclusion with page citation."""
+    type: str
+    description: str
+    page: int
+
+
+class FactSheetClause(BaseModel):
+    """Policy clause with risk assessment."""
+    type: str
+    summary: str
+    page: int
+    risk_level: Literal["low", "medium", "high"]
+
+
+class FactSheetRedFlag(BaseModel):
+    """Red flag with severity assessment."""
+    type: str
+    description: str
+    page: int
+    severity: Literal["low", "medium", "high"]
+
+
+class FactSheet(BaseModel):
+    """Master Policy Fact Sheet from Map-Reduce."""
+    policy_type: str
+    carrier: str
+    effective_date: str
+    grade: Grade
+    liability_limits: List[LiabilityLimit] = []
+    exclusions: List[Exclusion] = []
+    clauses: List[FactSheetClause] = []
+    red_flags: List[FactSheetRedFlag] = []
+    top_risk: str
+    summary: str
+
+
+class AuditRequest(BaseModel):
+    """Request for policy audit using Map-Reduce."""
+    session_id: str
+    extracted_text: str
+
+
+class AuditResponse(BaseModel):
+    """Response from policy audit."""
+    session_id: str
+    fact_sheet: Dict[str, Any]
+
+
+# ===========================================
 # Chat Models
 # ===========================================
 
@@ -73,10 +133,19 @@ class ChatRequest(BaseModel):
     message: str
 
 
+class ChatWithContextRequest(BaseModel):
+    """Request for Deep Dive chat with context."""
+    session_id: str
+    message: str
+    extracted_text: str = ""  # Legacy: raw policy text
+    fact_sheet: Dict[str, Any] = None  # New: structured fact sheet from Map-Reduce
+
+
 class ChatResponse(BaseModel):
     """Response from Deep Dive chat."""
     response: str
     page: int | None = None
+    excerpt: str | None = None
     disclaimer: str = "page X — not legal advice"
 
 
