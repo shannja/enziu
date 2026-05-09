@@ -8,7 +8,13 @@ import { FullReport } from "./full-report";
 import { DeepDiveQuestions } from "./deep-dive-questions";
 import { motion, AnimatePresence } from "framer-motion";
 import type { AnalysisResult } from "@/types";
-import { storePDF, storeText, getText, getFactSheet, storeFactSheet, deleteSession, cleanupExpiredSessions, cleanupOrphanedSessions, storeEncryptedFactSheet, getEncryptedFactSheet, storeRecoveryVault } from "@/lib/pdf-storage";
+import {
+  storePDF, storeEncryptedText, getEncryptedText, getFactSheet, storeFactSheet,
+  getPDF, deleteSession, cleanupExpiredSessions, cleanupOrphanedSessions,
+  storeEncryptedFactSheet, getEncryptedFactSheet,
+  storeRecoveryVault, getRecoveryVault, blobToDataURL,
+  encryptForSessionStorage, decryptFromSessionStorage,
+} from "@/lib/pdf-storage";
 import { VoucherRecovery } from "./voucher-recovery";
 
 type CustomerStep =
@@ -21,183 +27,220 @@ type CustomerStep =
   | "recovery";
 
 const fadeInUp = {
-  initial: { opacity: 0, y: 20 },
-  animate: { opacity: 1, y: 0 },
-  exit: { opacity: 0, y: -20 },
-  transition: { duration: 0.4, ease: "easeOut" }
+  initial:    { opacity: 0, y: 20 },
+  animate:    { opacity: 1, y: 0 },
+  exit:       { opacity: 0, y: -20 },
+  transition: { duration: 0.4, ease: "easeOut" },
 };
 
-export function CustomerMode() {
-  const [step, setStep] = useState<CustomerStep>("idle");
-  const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(
-    null
-  );
-  const [fullReportResult, setFullReportResult] = useState<AnalysisResult | null>(null);
-  const [sessionId, setSessionId] = useState<string | null>(null);
-  const [voucherCode, setVoucherCode] = useState<string | null>(null);
-  const [isGeneratingReport, setIsGeneratingReport] = useState(false);
-  const [reportError, setReportError] = useState<string | null>(null);
-  const [sneakPeekRemaining, setSneakPeekRemaining] = useState(3);
-  const [loadingMessage, setLoadingMessage] = useState("Generating your full report...");
-  const [analyzingMessage, setAnalyzingMessage] = useState("Analyzing your policy...");
+// ---------------------------------------------------------------------------
+// Helpers — encryption envelope unwrapping
+// ---------------------------------------------------------------------------
 
-  const renderFlagName = (flagId: string): string => {
-    // Capitalize first letter of each word for snake_case fallback
-    return flagId.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
-  };
+/**
+ * Parse a value that may be a JSON string (double-serialised by some
+ * IndexedDB wrapper implementations).
+ */
+function ensureParsed(value: any): any {
+  if (typeof value === "string") {
+    try { return JSON.parse(value); } catch { return value; }
+  }
+  return value;
+}
+
+/**
+ * A "valid auditor report" has EITHER a `grade` object with an `overall` key
+ * OR a `red_flags` array at the top level.
+ */
+function isValidFactSheet(obj: any): boolean {
+  if (!obj || typeof obj !== "object") return false;
+  return (
+    (obj.grade != null && typeof obj.grade === "object" && "overall" in obj.grade) ||
+    Array.isArray(obj.red_flags)
+  );
+}
+
+/**
+ * Unwrap any encryption / storage envelope so the caller always receives
+ * the raw auditor report object.
+ *
+ * Known envelope shapes:
+ *   { data: <report|string>, iv: "...", salt: "..." }   ← Web Crypto AES-GCM
+ *   { value: <report|string>, ... }                     ← generic wrapper
+ *   { factSheet: <report|string>, ... }                 ← accidental double-wrap
+ *
+ * If the top-level object already passes isValidFactSheet it is returned as-is.
+ */
+function unwrapFactSheet(raw: any): any {
+  let obj = ensureParsed(raw);
+  if (!obj || typeof obj !== "object") return obj;
+
+  if (isValidFactSheet(obj)) return obj;
+
+  if ("data" in obj && obj.data != null) {
+    const inner = ensureParsed(obj.data);
+    if (isValidFactSheet(inner)) return inner;
+  }
+
+  if ("value" in obj && obj.value != null) {
+    const inner = ensureParsed(obj.value);
+    if (isValidFactSheet(inner)) return inner;
+  }
+
+  if ("factSheet" in obj && obj.factSheet != null) {
+    const inner = ensureParsed(obj.factSheet);
+    if (isValidFactSheet(inner)) return inner;
+  }
+
+  return obj;
+}
+
+// ---------------------------------------------------------------------------
+// Component
+// ---------------------------------------------------------------------------
+
+export function CustomerMode() {
+  const [step, setStep]                               = useState<CustomerStep>("idle");
+  const [analysisResult, setAnalysisResult]           = useState<AnalysisResult | null>(null);
+  const [fullReportResult, setFullReportResult]       = useState<AnalysisResult | null>(null);
+  const [sessionId, setSessionId]                     = useState<string | null>(null);
+  const [voucherCode, setVoucherCode]                 = useState<string | null>(null);
+  const [recoveredPdfData, setRecoveredPdfData]       = useState<string | undefined>(undefined);
+  const [isGeneratingReport, setIsGeneratingReport]   = useState(false);
+  const [reportError, setReportError]                 = useState<string | null>(null);
+  const [sneakPeekRemaining, setSneakPeekRemaining]   = useState(3);
+  const [loadingMessage, setLoadingMessage]           = useState("Generating your full report...");
+  const [analyzingMessage, setAnalyzingMessage]       = useState("Analyzing your policy...");
+
+  // Tracks the PDF page that DeepDiveQuestions last navigated to, so FullReport
+  // and its PDFViewer stay in sync when a Q&A card is clicked.
+  const [deepDivePage, setDeepDivePage] = useState<number | undefined>(undefined);
+
+  const renderFlagName = (flagId: string): string =>
+    flagId.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 
   /**
-   * Convert a fact sheet (from API or cache) to AnalysisResult format
-   * Used by both instant cache access and fallback audit path
-   * 
-   * IMPORTANT: The API returns the full auditor report with these top-level fields:
-   * - red_flags: array of RedFlag objects
-   * - exclusions: array of Exclusion objects  
-   * - clauses: array of Clause objects
-   * - insight_cards: array of InsightCard objects
-   * - plain_english_summary: string
-   * - grade: object with overall, clarity, coverage, claimsEfficiency
+   * Convert a raw auditor fact sheet to the AnalysisResult shape the UI expects.
+   * Calls unwrapFactSheet first so it handles any storage envelope transparently.
    */
-  const convertFactSheetToResult = (sid: string, factSheet: any): AnalysisResult => {
-    if (!factSheet) {
-      throw new Error("No fact sheet data");
-    }
-    
-    // Handle grade: the API returns grade as an object with overall, clarity, coverage, claimsEfficiency
-    const gradeObj = factSheet.grade || {};
-    const overallGrade = gradeObj.overall || "C";
-    const clarityGrade = gradeObj.clarity || overallGrade;
-    const coverageGrade = gradeObj.coverage || overallGrade;
-    const claimsGrade = gradeObj.claimsEfficiency || overallGrade;
+  const convertFactSheetToResult = (sid: string, rawFactSheet: any): AnalysisResult => {
+    if (!rawFactSheet) throw new Error("No fact sheet data");
 
-    // Map red_flags array - each flag has: flag_id, source, severity, deduction, page, excerpt, plain_english, legal_basis
-    const redFlagsArray = Array.isArray(factSheet.red_flags) ? factSheet.red_flags : [];
-    
-    // Map exclusions array - each exclusion has: type, summary, page, risk_level
-    const exclusionsArray = Array.isArray(factSheet.exclusions) ? factSheet.exclusions : [];
-    
-    // Map clauses array - each clause has: type, summary, page, risk_level
-    const clausesArray = Array.isArray(factSheet.clauses) ? factSheet.clauses : [];
-    
-    // Map insight_cards array - each card has: question, answer, category, priority, page, excerpt
-    const insightCardsArray = Array.isArray(factSheet.insight_cards) ? factSheet.insight_cards : [];
+    const factSheet = unwrapFactSheet(rawFactSheet);
+    if (!factSheet || typeof factSheet !== "object") {
+      throw new Error("Fact sheet is not a valid object after parsing");
+    }
+
+    const gradeObj        = factSheet.grade         || {};
+    const overallGrade    = gradeObj.overall         || "C";
+    const redFlagsArray   = Array.isArray(factSheet.red_flags)    ? factSheet.red_flags    : [];
+    const exclusionsArray = Array.isArray(factSheet.exclusions)   ? factSheet.exclusions   : [];
+    const clausesArray    = Array.isArray(factSheet.clauses)      ? factSheet.clauses      : [];
+
+    // insight_cards come directly from the Auditor (Step 6 of the scoring prompt).
+    // They are already validated and normalised by _validate_insight_cards in inference.py.
+    // We map them here with safe defaults so the frontend never throws on a bad card.
+    const insightCards = Array.isArray(factSheet.insight_cards) ? factSheet.insight_cards : [];
 
     return {
       session_id: sid,
       grade: {
-        overall: overallGrade,
-        clarity: clarityGrade,
-        coverage: coverageGrade,
-        claimsEfficiency: claimsGrade,
+        overall:          overallGrade,
+        clarity:          gradeObj.clarity          || overallGrade,
+        coverage:         gradeObj.coverage         || overallGrade,
+        claimsEfficiency: gradeObj.claimsEfficiency || overallGrade,
       },
-      topRisk: factSheet.top_risk || (redFlagsArray.length > 0 ? redFlagsArray[0].plain_english : "No major risks detected"),
-      redFlags: redFlagsArray.map((flag: any) => flag.flag_id || flag.type || "unknown"),
-      summary: factSheet.plain_english_summary || factSheet.summary || "",
+      topRisk: factSheet.top_risk
+        || (redFlagsArray.length > 0 ? redFlagsArray[0].plain_english : "No major risks detected"),
+      redFlags: redFlagsArray.map((f: any) => f.flag_id || f.type || "unknown"),
+      summary:  factSheet.plain_english_summary || factSheet.summary || "",
       detailedFlags: redFlagsArray.map((flag: any) => ({
-        flag_id: flag.flag_id || "unknown",
-        source: flag.source || "structural",
-        severity: flag.severity || "minor",
-        deduction: flag.deduction || 0,
-        page: flag.page,
-        excerpt: flag.excerpt || "",
+        flag_id:       flag.flag_id       || "unknown",
+        source:        flag.source        || "structural",
+        severity:      flag.severity      || "minor",
+        deduction:     flag.deduction     || 0,
+        page:          flag.page,
+        excerpt:       flag.excerpt       || "",
         plain_english: flag.plain_english || renderFlagName(flag.flag_id || "unknown"),
-        legal_basis: flag.legal_basis || "",
+        legal_basis:   flag.legal_basis   || "",
       })),
-      exclusions: exclusionsArray.map((exclusion: any) => ({
-        type: exclusion.type || "Unknown",
-        summary: exclusion.summary || "",
-        page: exclusion.page || 0,
-        risk_level: exclusion.risk_level || "medium",
+      exclusions: exclusionsArray.map((e: any) => ({
+        type:       e.type       || "Unknown",
+        summary:    e.summary    || "",
+        page:       e.page       || 0,
+        risk_level: e.risk_level || "medium",
       })),
-      clauses: clausesArray.map((clause: any) => ({
-        type: clause.type || "Unknown",
-        summary: clause.summary || "",
-        page: clause.page || 0,
-        risk_level: clause.risk_level || "medium",
+      clauses: clausesArray.map((c: any) => ({
+        type:       c.type       || "Unknown",
+        summary:    c.summary    || "",
+        page:       c.page       || 0,
+        risk_level: c.risk_level || "medium",
       })),
-      insight_cards: insightCardsArray.map((card: any) => ({
+      // Map each insight card with safe defaults.
+      // page and excerpt are the citation fields used by PDFViewer.
+      insight_cards: insightCards.map((card: any) => ({
         question: card.question || "",
-        answer: card.answer || "",
+        answer:   card.answer   || "",
         category: card.category || "explain",
-        priority: card.priority || 5,
-        page: card.page,
-        excerpt: card.excerpt || "",
+        priority: typeof card.priority === "number" ? card.priority : 5,
+        page:     typeof card.page === "number" && card.page > 0 ? card.page : null,
+        excerpt:  card.excerpt  || "",
       })),
-      clarity: factSheet.clarity,
-      coverage: factSheet.coverage,
-      claim_efficiency: factSheet.claim_efficiency,
-      total_deductions: factSheet.total_deductions || 0,
+      clarity:               factSheet.clarity,
+      coverage:              factSheet.coverage,
+      claim_efficiency:      factSheet.claim_efficiency,
+      total_deductions:      factSheet.total_deductions    || 0,
       plain_english_summary: factSheet.plain_english_summary || "",
-      comparison_ready: factSheet.comparison_ready,
+      comparison_ready:      factSheet.comparison_ready,
     };
   };
 
   const ANALYZING_MESSAGES = [
-    "Analyzing your policy...",
-    "Reading the fine print...",
-    "Scanning for red flags...",
-    "Calculating your score...",
-    "Almost done...",
+    "Analyzing your policy...", "Reading the fine print...", "Scanning for red flags...",
+    "Calculating your score...", "Almost done...", "Scoring the policy...",
+    "Looking for fine print...", "Identifying red flags...", "Building your report...",
+    "Calculating Enziu Index benchmarks...", "Quantifying liability exposure...",
+    "Scanning endorsements...", "Cross-referencing limits...",
+    "Detecting coverage gaps in fine print...", "Validating safeguards...", "Almost done...",
   ];
-
   const REPORT_MESSAGES = [
-    "Scoring the policy...",
-    "Looking for fine print...",
-    "Identifying red flags...",
-    "Building your report...",
-    "Calculating Enziu Index benchmarks...",
-    "Quantifying liability exposure...",
-    "Scanning endorsements...",
-    "Cross-referencing limits...",
-    "Detecting coverage gaps in fine print...",
-    "Validating safeguards...",
-    "Almost done...",
+    "Scoring the policy...", "Looking for fine print...", "Identifying red flags...",
+    "Building your report...", "Calculating Enziu Index benchmarks...",
+    "Quantifying liability exposure...", "Scanning endorsements...",
+    "Cross-referencing limits...", "Detecting coverage gaps in fine print...",
+    "Validating safeguards...", "Almost done...",
   ];
 
-  // Clean up stale IndexedDB records on mount
+  useEffect(() => { cleanupExpiredSessions(); cleanupOrphanedSessions("pending_"); }, []);
+
   useEffect(() => {
-    cleanupExpiredSessions();
-    cleanupOrphanedSessions("pending_");
-  }, []);
+    if (!isGeneratingReport) { setLoadingMessage("Generating your full report..."); return; }
+    let idx = 0;
+    const iv = setInterval(() => {
+      idx = (idx + 1) % REPORT_MESSAGES.length;
+      setLoadingMessage(REPORT_MESSAGES[idx]);
+    }, 4000);
+    return () => clearInterval(iv);
+  }, [isGeneratingReport]);
 
-    // Cycle loading messages while generating report
-    useEffect(() => {
-      if (!isGeneratingReport) {
-        setLoadingMessage("Generating your full report...");
-        return;
-      }
-      let idx = 0;
-      const interval = setInterval(() => {
-        idx = (idx + 1) % REPORT_MESSAGES.length;
-        setLoadingMessage(REPORT_MESSAGES[idx]);
-      }, 4000);
-      return () => clearInterval(interval);
-    }, [isGeneratingReport]);
+  useEffect(() => {
+    if (step !== "analyzing") { setAnalyzingMessage("Analyzing your policy..."); return; }
+    let idx = 0;
+    const iv = setInterval(() => {
+      idx = (idx + 1) % ANALYZING_MESSAGES.length;
+      setAnalyzingMessage(ANALYZING_MESSAGES[idx]);
+    }, 3000);
+    return () => clearInterval(iv);
+  }, [step]);
 
-    // Cycle analyzing messages while analyzing sneak peek
-    useEffect(() => {
-      if (step !== "analyzing") {
-        setAnalyzingMessage("Analyzing your policy...");
-        return;
-      }
-      let idx = 0;
-      const interval = setInterval(() => {
-        idx = (idx + 1) % ANALYZING_MESSAGES.length;
-        setAnalyzingMessage(ANALYZING_MESSAGES[idx]);
-      }, 3000);
-      return () => clearInterval(interval);
-    }, [step]);
-
-    // 3/day sneak peek rate limit
-    useEffect(() => {
-    const STORAGE_KEY = "enziu_sneak_count";
+  useEffect(() => {
+    const KEY = "enziu_sneak_count";
     const today = new Date().toDateString();
     try {
-      const stored = localStorage.getItem(STORAGE_KEY);
+      const stored = localStorage.getItem(KEY);
       const data = stored ? JSON.parse(stored) : { date: today, count: 0 };
-      // Reset if new day
       if (data.date !== today) {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify({ date: today, count: 0 }));
+        localStorage.setItem(KEY, JSON.stringify({ date: today, count: 0 }));
         setSneakPeekRemaining(3);
       } else {
         setSneakPeekRemaining(Math.max(0, 3 - data.count));
@@ -207,227 +250,165 @@ export function CustomerMode() {
     }
   }, []);
 
+  // ── Upload & Sneak Peek ────────────────────────────────────────────────────
+
   const handleFileUploaded = async (file: File) => {
-    // Rate limit check — 3 sneak peeks per day
     if (sneakPeekRemaining <= 0) {
-      setReportError("You've reached the daily limit of 3 free sneak peeks. Please try again tomorrow or purchase a full report.");
+      setReportError(
+        "You've reached the daily limit of 3 free sneak peeks. " +
+        "Please try again tomorrow or purchase a full report."
+      );
       return;
     }
-
     setStep("uploading");
-
     try {
       setStep("analyzing");
-
-      // Stream file to API for extraction + sneak peek
       const formData = new FormData();
       formData.append("file", file);
-
-      const response = await fetch("/api/extract", {
-        method: "POST",
-        body: formData,
-      });
-
+      const response = await fetch("/api/extract", { method: "POST", body: formData });
       if (!response.ok) {
         const error = await response.json().catch(() => ({}));
         throw new Error(error.detail || "Upload failed");
       }
-
       const result = await response.json();
       setAnalysisResult(result);
       setSessionId(result.session_id);
-      
-      // Store session ID in localStorage for PDF viewer recovery
       localStorage.setItem("recent_session", result.session_id);
-      
-      // Gold-Handoff: Store PDF in IndexedDB for viewer, clean up pending record
       try {
         await storePDF(result.session_id, file);
-        await deleteSession(`pending_${file.name}`); // Clean orphaned pending record
+        await deleteSession(`pending_${file.name}`);
       } catch (err) {
-        console.error('[CustomerMode] Failed to store PDF:', err);
+        console.error("[CustomerMode] Failed to store PDF:", err);
       }
-      
-      // Gold-Handoff: Store extracted text in sessionStorage + IndexedDB
       try {
-        sessionStorage.setItem("enziu_vault", result.extracted_text);
-        await storeText(result.session_id, result.extracted_text);
-        console.log('[CustomerMode] Text stored via Gold-Handoff pattern');
+        // Store encrypted text in sessionStorage
+        const encryptedText = await encryptForSessionStorage(result.extracted_text, result.session_id);
+        sessionStorage.setItem("enziu_vault", encryptedText);
+        await storeEncryptedText(result.session_id, result.extracted_text);
       } catch (err) {
-        console.error('[CustomerMode] Failed to store text:', err);
+        console.error("[CustomerMode] Failed to store text:", err);
       }
-
-      // Cache the full report (encrypted) for instant access after payment
-      // The API already computed the full audit during sneak peek
       if (result.full_report) {
         try {
+          // Store the plain report object — NOT re-wrapped — so getEncryptedFactSheet
+          // returns it directly and unwrapFactSheet finds it immediately.
           await storeEncryptedFactSheet(result.session_id, result.full_report);
-          console.log('[CustomerMode] Full report cached (encrypted) for instant access after payment');
         } catch (err) {
-          console.error('[CustomerMode] Failed to cache encrypted fact sheet:', err);
-          // Non-fatal - continue with sneak peek
+          console.error("[CustomerMode] Failed to cache encrypted fact sheet:", err);
         }
       }
-
       setStep("sneak-peek");
     } catch (error) {
-      console.error("Upload error:", error);
       const message = error instanceof Error ? error.message : "Upload failed";
-      // Clean up any orphaned data on error
       deleteSession(`pending_${file.name}`).catch(() => {});
-      // Show error in UI - scanned doc message comes from server
       setReportError(message);
       setStep("idle");
-      // Reset error after 5 seconds
       setTimeout(() => setReportError(null), 5000);
     }
   };
 
-  const handlePaymentComplete = (voucherCode?: string) => {
-    if (voucherCode) {
-      setVoucherCode(voucherCode);
-    }
+  // ── Payment & Report Generation ───────────────────────────────────────────
+
+  const handlePaymentComplete = (code?: string) => {
+    if (code) setVoucherCode(code);
     generateFullReport();
   };
 
-  const generateFullReport = async () => {
-    if (!sessionId) {
-      console.error("Cannot generate report - missing session");
-      setStep("full-report");
-      return;
+  /** Store the unwrapped factSheet in the recovery vault (no envelope). */
+  const saveRecoveryVault = async (sid: string, factSheet: any) => {
+    if (!voucherCode) return;
+    try {
+      // Decrypt text from sessionStorage or get from IndexedDB
+      const sessionText = sessionStorage.getItem("enziu_vault");
+      const extractedText = sessionText
+        ? await decryptFromSessionStorage(sessionText, sid)
+        : (await getEncryptedText(sid)) || "";
+      const pdfBlob = await getPDF(sid);
+      const pdfData = pdfBlob ? await blobToDataURL(pdfBlob) : undefined;
+      if (extractedText) {
+        await storeRecoveryVault(voucherCode, { factSheet, extractedText, sessionId: sid, pdfData });
+        console.log("[CustomerMode] Recovery vault saved");
+      }
+    } catch (err) {
+      console.error("[CustomerMode] Failed to save recovery vault:", err);
     }
+  };
 
+  const generateFullReport = async () => {
+    if (!sessionId) { setStep("full-report"); return; }
     setIsGeneratingReport(true);
     setReportError(null);
     setStep("paid");
 
     try {
-      // INSTANT ACCESS: Check for encrypted cached fact sheet first
-      // This was stored during sneak peek, so payment = instant unlock
-      const encryptedFactSheet = await getEncryptedFactSheet(sessionId);
-      if (encryptedFactSheet) {
-        console.log('[CustomerMode] Using encrypted cached fact sheet - INSTANT ACCESS');
-        
-        // Convert to analysis result format
-        const factSheet = encryptedFactSheet;
-        const result = convertFactSheetToResult(sessionId, factSheet);
-        
+      // 1. Encrypted cache (instant access — stored during sneak peek)
+      const rawEncrypted = await getEncryptedFactSheet(sessionId);
+      if (rawEncrypted) {
+        const factSheet = unwrapFactSheet(rawEncrypted);
+        if (isValidFactSheet(factSheet)) {
+          const result = convertFactSheetToResult(sessionId, factSheet);
+          setFullReportResult(result);
+          setStep("full-report");
+          setIsGeneratingReport(false);
+          await saveRecoveryVault(sessionId, factSheet);
+          return;
+        }
+        console.warn("[CustomerMode] Encrypted cache had unexpected shape, falling through");
+      }
+
+      // 2. Unencrypted cache
+      const existing = await getFactSheet(sessionId);
+      if (existing) {
+        const factSheet = unwrapFactSheet(existing);
+        const result    = convertFactSheetToResult(sessionId, factSheet);
         setFullReportResult(result);
         setStep("full-report");
         setIsGeneratingReport(false);
-        
-        // Store as recovery vault if voucher code is available
-        if (voucherCode) {
-          try {
-            const extractedText = sessionStorage.getItem("enziu_vault") || await getText(sessionId) || "";
-            if (extractedText) {
-              await storeRecoveryVault(voucherCode, {
-                factSheet,
-                extractedText,
-                sessionId,
-              });
-              console.log('[CustomerMode] Recovery vault created for future access');
-            }
-          } catch (err) {
-            console.error('[CustomerMode] Failed to create recovery vault:', err);
-          }
-        }
+        await saveRecoveryVault(sessionId, factSheet);
         return;
       }
 
-      // Fallback: Check for unencrypted cached fact sheet
-      const existingFactSheet = await getFactSheet(sessionId);
-      if (existingFactSheet) {
-        console.log('[CustomerMode] Using unencrypted cached fact sheet from IndexedDB');
-        const result = convertFactSheetToResult(sessionId, existingFactSheet);
-        setFullReportResult(result);
-        setStep("full-report");
-        setIsGeneratingReport(false);
-        
-        // Store as recovery vault if voucher code is available
-        if (voucherCode) {
-          try {
-            const extractedText = sessionStorage.getItem("enziu_vault") || await getText(sessionId) || "";
-            if (extractedText) {
-              await storeRecoveryVault(voucherCode, {
-                factSheet: existingFactSheet,
-                extractedText,
-                sessionId,
-              });
-              console.log('[CustomerMode] Recovery vault created for future access');
-            }
-          } catch (err) {
-            console.error('[CustomerMode] Failed to create recovery vault:', err);
-          }
-        }
-        return;
-      }
-
-      // Cache miss: Get text and run full audit
-      console.log('[CustomerMode] Cache miss - running full audit');
-      let extractedText = sessionStorage.getItem("enziu_vault");
-      if (!extractedText) {
-        extractedText = await getText(sessionId);
-      }
-      
-      if (!extractedText) {
+      // 3. Cache miss — full audit via API
+      const sessionText = sessionStorage.getItem("enziu_vault");
+      const extractedText = sessionText
+        ? await decryptFromSessionStorage(sessionText, sessionId)
+        : (await getEncryptedText(sessionId));
+      if (!extractedText)
         throw new Error("No extracted text found. Please re-upload your PDF.");
-      }
 
-      // Single-shot full audit
-      const abortController = new AbortController();
-      const timeoutId = setTimeout(() => abortController.abort(), 480000);
-
+      const ac  = new AbortController();
+      const tid = setTimeout(() => ac.abort(), 480_000);
       const auditResponse = await fetch("/api/policy/audit", {
-        method: "POST",
+        method:  "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          session_id: sessionId,
-          extracted_text: extractedText,
-        }),
-        signal: abortController.signal,
+        body:    JSON.stringify({ session_id: sessionId, extracted_text: extractedText }),
+        signal:  ac.signal,
       });
-
-      clearTimeout(timeoutId);
-
-      if (!auditResponse.ok) {
+      clearTimeout(tid);
+      if (!auditResponse.ok)
         throw new Error(`Audit failed: ${auditResponse.status}`);
-      }
 
       const auditResult = await auditResponse.json();
-      
-      // Store the fact sheet in IndexedDB for future use
-      await storeFactSheet(sessionId, auditResult.report);
-      
-      // Convert fact sheet to analysis result format
-      const factSheet = auditResult.report;
-      
-      if (!factSheet) {
-        throw new Error("No fact sheet data received from audit");
-      }
-      
-      // Use the same conversion logic as the cached path
+      const factSheet   = unwrapFactSheet(auditResult.report);
+      if (!factSheet) throw new Error("No fact sheet data received from audit");
+
+      await storeFactSheet(sessionId, factSheet);
       const result = convertFactSheetToResult(sessionId, factSheet);
-      
       setFullReportResult(result);
       setStep("full-report");
+      await saveRecoveryVault(sessionId, factSheet);
+
     } catch (error) {
-      console.error("Full analysis error:", error);
-      
-      // Clean up stale session data on failure
       if (sessionId) {
         deleteSession(sessionId).catch(console.error);
         sessionStorage.removeItem("enziu_vault");
       }
-      
-      let errorMessage = "Failed to generate analysis";
-      if (error instanceof Error) {
-        if (error.name === 'AbortError' || error.message.includes('aborted')) {
-          errorMessage = "Analysis timed out. The policy may be too large. Please try again.";
-        } else {
-          errorMessage = error.message;
-        }
-      }
+      const errorMessage =
+        error instanceof Error
+          ? error.name === "AbortError" || error.message.includes("aborted")
+            ? "Analysis timed out. Please try again."
+            : error.message
+          : "Failed to generate analysis";
       setReportError(errorMessage);
       setStep("full-report");
     } finally {
@@ -435,87 +416,93 @@ export function CustomerMode() {
     }
   };
 
+  // ── Reset ──────────────────────────────────────────────────────────────────
+
   const handleReset = () => {
-    // Clean up IndexedDB for the previous session
-    if (sessionId) {
-      deleteSession(sessionId).catch(console.error);
-    }
-    // Clean up localStorage keys
+    if (sessionId) deleteSession(sessionId).catch(console.error);
     localStorage.removeItem("recent_session");
     localStorage.removeItem("enziu_payment");
     sessionStorage.removeItem("enziu_vault");
-    
     setStep("idle");
     setAnalysisResult(null);
     setFullReportResult(null);
     setSessionId(null);
+    setRecoveredPdfData(undefined);
+    setDeepDivePage(undefined);
     setIsGeneratingReport(false);
     setReportError(null);
   };
 
-  const handleVoucherRecovery = (data: { factSheet: any; extractedText: string; sessionId: string }) => {
-    // Restore session from encrypted vault — no re-upload, no re-inference
+  // ── Voucher Recovery ───────────────────────────────────────────────────────
+
+  const handleVoucherRecovery = async (data: {
+    factSheet: any;
+    extractedText: string;
+    sessionId: string;
+    pdfData?: string;
+  }) => {
     setSessionId(data.sessionId);
-    
-    // Store text in sessionStorage + IndexedDB for chat
-    sessionStorage.setItem("enziu_vault", data.extractedText);
-    storeText(data.sessionId, data.extractedText).catch(console.error);
-    
-    // Convert fact sheet to analysis result format using the same logic as generateFullReport
-    const factSheet = data.factSheet;
-    
-    if (!factSheet) {
-      console.error('[CustomerMode] No fact sheet data in voucher recovery');
+    // Store encrypted text in sessionStorage
+    const encryptedText = await encryptForSessionStorage(data.extractedText, data.sessionId);
+    sessionStorage.setItem("enziu_vault", encryptedText);
+    storeEncryptedText(data.sessionId, data.extractedText).catch(console.error);
+    if (data.pdfData) setRecoveredPdfData(data.pdfData);
+
+    const factSheet = unwrapFactSheet(data.factSheet);
+
+    if (!isValidFactSheet(factSheet)) {
+      console.error(
+        "[CustomerMode] Recovery factSheet failed shape check. Keys:",
+        factSheet && typeof factSheet === "object"
+          ? Object.keys(factSheet)
+          : typeof factSheet,
+      );
+      setReportError(
+        "Could not read the recovered report. The data may be corrupted. " +
+        "Please re-upload your policy PDF to generate a fresh report.",
+      );
       setStep("idle");
       return;
     }
-    
-    // Use the same conversion logic as generateFullReport
-    const result = convertFactSheetToResult(data.sessionId, factSheet);
-    setFullReportResult(result);
-    setStep("full-report");
+
+    try {
+      const result = convertFactSheetToResult(data.sessionId, factSheet);
+      setFullReportResult(result);
+      setStep("full-report");
+    } catch (err) {
+      console.error("[CustomerMode] convertFactSheetToResult failed during recovery:", err);
+      setReportError("Failed to parse the recovered report. Please re-upload your policy.");
+      setStep("idle");
+    }
   };
 
   useEffect(() => {
-    const handleResetEvent = () => {
-      handleReset();
-    };
-
-    window.addEventListener("enziu-reset", handleResetEvent);
-    return () => window.removeEventListener("enziu-reset", handleResetEvent);
+    window.addEventListener("enziu-reset", handleReset);
+    return () => window.removeEventListener("enziu-reset", handleReset);
   }, []);
 
-  const handlePageClick = (page: number) => {
-    // Overview page navigation delegated to PDF viewer via full-report
-    // This is handled internally by the insight card dispatch events
-  };
-
-  const shouldHideToggle = ["uploading", "analyzing", "sneak-peek", "paid", "full-report"].includes(step);
+  const shouldHideToggle = [
+    "uploading", "analyzing", "sneak-peek", "paid", "full-report",
+  ].includes(step);
 
   useEffect(() => {
-    if (shouldHideToggle) {
-      window.dispatchEvent(new CustomEvent("enziu-hide-toggle", { detail: { hide: true } }));
-      window.dispatchEvent(new CustomEvent("enziu-hide-footer", { detail: { hide: true } }));
-    } else {
-      window.dispatchEvent(new CustomEvent("enziu-hide-toggle", { detail: { hide: false } }));
-      window.dispatchEvent(new CustomEvent("enziu-hide-footer", { detail: { hide: false } }));
-    }
-    
+    const hide = shouldHideToggle;
+    window.dispatchEvent(new CustomEvent("enziu-hide-toggle", { detail: { hide } }));
+    window.dispatchEvent(new CustomEvent("enziu-hide-footer", { detail: { hide } }));
     return () => {
       window.dispatchEvent(new CustomEvent("enziu-hide-toggle", { detail: { hide: false } }));
       window.dispatchEvent(new CustomEvent("enziu-hide-footer", { detail: { hide: false } }));
     };
   }, [step]);
 
+  // ── Render ─────────────────────────────────────────────────────────────────
+
   return (
     <div className="max-w-6xl mx-auto">
       <AnimatePresence mode="wait">
+
         {step === "idle" && (
-          <motion.div
-            key="idle"
-            {...fadeInUp}
-            className="text-center py-16"
-          >
+          <motion.div key="idle" {...fadeInUp} className="text-center py-16">
             {reportError && (
               <div className="max-w-md mx-auto mb-6 bg-red-900/20 border border-red-500/30 rounded-lg p-4 text-sm text-red-400">
                 {reportError}
@@ -529,23 +516,19 @@ export function CustomerMode() {
               Complex insurance policies, simplified. Upload for instant scoring and clarity.
             </p>
             <CustomerDropzone onFileUploaded={handleFileUploaded} />
-            <div className="mt-6">
+            {/* <div className="mt-6">
               <button
                 onClick={() => setStep("recovery")}
                 className="text-sm text-muted-foreground hover:text-brand-amber transition-colors underline underline-offset-2"
               >
                 Already paid? Recover your report
               </button>
-            </div>
+            </div> */}
           </motion.div>
         )}
 
         {step === "recovery" && (
-          <motion.div
-            key="recovery"
-            {...fadeInUp}
-            className="py-16"
-          >
+          <motion.div key="recovery" {...fadeInUp} className="py-16">
             <VoucherRecovery onRecoveryComplete={handleVoucherRecovery} />
             <div className="mt-6 text-center">
               <button
@@ -585,11 +568,7 @@ export function CustomerMode() {
         )}
 
         {step === "sneak-peek" && analysisResult && (
-          <motion.div
-            key="sneak-peek"
-            {...fadeInUp}
-            className="py-8"
-          >
+          <motion.div key="sneak-peek" {...fadeInUp} className="py-8">
             <SneakPeekBento result={analysisResult} />
             <div className="mt-8 text-center">
               <PaddleCheckout
@@ -618,24 +597,34 @@ export function CustomerMode() {
         )}
 
         {step === "full-report" && (fullReportResult || analysisResult) && (
-          <motion.div
-            key="full-report"
-            {...fadeInUp}
-            className="py-8"
-          >
-            <FullReport 
-              result={fullReportResult || analysisResult} 
+          <motion.div key="full-report" {...fadeInUp} className="py-8">
+            {/*
+              FullReport owns the sticky PDF viewer.
+              It listens for "enziu-highlight" events dispatched by DeepDiveQuestions
+              so clicking a Q&A card navigates and highlights the PDF automatically.
+            */}
+            <FullReport
+              result={fullReportResult || analysisResult}
+              pdfData={recoveredPdfData}
               isGenerating={isGeneratingReport}
               sessionId={sessionId || undefined}
               voucherCode={voucherCode || undefined}
             />
+
+            {/*
+              DeepDiveQuestions renders the Policy Q&A tab (insight_cards only).
+              onPageClick fires the "enziu-highlight" custom event internally, which
+              FullReport's useEffect picks up to sync its PDFViewer.  We also store
+              the page in deepDivePage so the parent knows where the viewer is.
+            */}
             <DeepDiveQuestions
               sessionId={sessionId || ""}
-              insightCards={fullReportResult?.insight_cards}
-              onPageClick={handlePageClick}
+              insightCards={(fullReportResult || analysisResult)?.insight_cards}
+              onPageClick={(page) => setDeepDivePage(page)}
             />
           </motion.div>
-        )}      
+        )}
+
       </AnimatePresence>
     </div>
   );

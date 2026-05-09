@@ -17,29 +17,20 @@ interface PDFViewerProps {
 }
 
 // ─── Normalize text for matching ─────────────────────────────────────────────
-// PDFs often contain ligatures, smart quotes, non-breaking spaces, and soft
-// hyphens that don't match the plain ASCII the auditor returns as an excerpt.
-// We normalize both sides of the comparison identically so matching works.
 function normalizeForMatch(text: string): string {
   return text
-    // Smart quotes → straight
     .replace(/[\u2018\u2019\u201A\u201B\u2032\u2035]/g, "'")
     .replace(/[\u201C\u201D\u201E\u201F\u2033\u2036]/g, '"')
-    // En/em dashes → hyphen
     .replace(/[\u2013\u2014\u2015]/g, "-")
-    // Ellipsis → three dots
     .replace(/\u2026/g, "...")
-    // Non-breaking space, soft hyphen, zero-width chars → regular space / nothing
     .replace(/\u00A0/g, " ")
     .replace(/\u00AD/g, "")
     .replace(/[\u200B\u200C\u200D\uFEFF]/g, "")
-    // Ligatures: fi, fl, ff, ffi, ffl
     .replace(/\uFB00/g, "ff")
     .replace(/\uFB01/g, "fi")
     .replace(/\uFB02/g, "fl")
     .replace(/\uFB03/g, "ffi")
     .replace(/\uFB04/g, "ffl")
-    // Collapse whitespace
     .replace(/\s+/g, " ")
     .trim()
     .toLowerCase();
@@ -50,7 +41,12 @@ export function PDFViewer({ pdfData, currentPage: externalPage, highlightExcerpt
   const [pageNumber, setPageNumber] = useState(1);
   const [scale, setScale]           = useState(1.0);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [isSearching, setIsSearching] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  // Debounce timer ref for MutationObserver-triggered highlight attempts
+  const highlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Track which pages have been searched for excerpt
+  const searchedPagesRef = useRef<Set<number>>(new Set());
 
   const onDocLoadSuccess = useCallback(({ numPages }: { numPages: number }) => {
     setNumPages(numPages);
@@ -58,12 +54,13 @@ export function PDFViewer({ pdfData, currentPage: externalPage, highlightExcerpt
     setPageNumber(start);
   }, [externalPage]);
 
-  // Sync external page
+  // Sync external page (only when no excerpt search is needed)
   useEffect(() => {
     if (!externalPage || externalPage > numPages || externalPage === pageNumber) return;
+    if (highlightExcerpt) return; // Let excerpt search handle navigation
     setPageNumber(externalPage);
     onPageChange?.(externalPage);
-  }, [externalPage, numPages]);
+  }, [externalPage, numPages, highlightExcerpt]);
 
   const goToPage = useCallback((page: number) => {
     if (page < 1 || page > numPages) return;
@@ -93,16 +90,27 @@ export function PDFViewer({ pdfData, currentPage: externalPage, highlightExcerpt
   }, []);
 
   // ─── Highlight logic ────────────────────────────────────────────────────────
-  // Strategy: collect all text spans, normalize both the joined page text and
-  // the excerpt the same way, find the match range, then mark the corresponding
-  // spans. We re-run whenever the excerpt or page changes, and also watch DOM
-  // mutations so we catch the text layer rendering after the page loads.
+  //
+  // FIX: The original code used `normalized.join(" ")` and then tracked charCount
+  // by adding `spanLen + 1` for every span — including empty/whitespace-only ones.
+  // Empty normalized spans produce "" which still inserts a " " in the joined
+  // string (e.g. ["a", "", "b"].join(" ") === "a  b"), but the needle is
+  // normalized with collapsed whitespace so it will never contain double spaces.
+  // This caused the character offsets to drift, making the match fail or highlight
+  // the wrong spans.
+  //
+  // Fix: Filter out empty-normalized spans before building the joined string and
+  // the offset index. We work only with non-empty spans, so the joined string
+  // exactly mirrors how the needle was normalized (single spaces between tokens).
+  //
+  // Secondary fix: debounce the MutationObserver callback so we don't attempt
+  // highlighting mid-render when the text layer is only partially populated.
 
   const applyHighlight = useCallback(() => {
     if (!highlightExcerpt) return;
 
     const needle = normalizeForMatch(highlightExcerpt);
-    if (!needle) return;
+    if (!needle || needle.length < 5) return;
 
     const containers = document.querySelectorAll(".react-pdf__Page__textContent");
     containers.forEach((container) => {
@@ -113,13 +121,26 @@ export function PDFViewer({ pdfData, currentPage: externalPage, highlightExcerpt
         el.removeAttribute("data-enziu-hl");
       });
 
-      const spans = Array.from(container.querySelectorAll<HTMLElement>("span"));
+      const allSpans = Array.from(container.querySelectorAll<HTMLElement>("span"));
+      if (!allSpans.length) return;
+
+      // --- KEY FIX ---
+      // Build a filtered list that excludes spans whose normalized text is empty.
+      // This ensures the joined string and char-offset tracking stay in sync with
+      // the needle (which also has collapsed whitespace, no empty tokens).
+      const spans: HTMLElement[] = [];
+      const normalized: string[] = [];
+      for (const span of allSpans) {
+        const n = normalizeForMatch(span.textContent ?? "");
+        if (n.length > 0) {
+          spans.push(span);
+          normalized.push(n);
+        }
+      }
+
       if (!spans.length) return;
 
-      // Build a parallel array of normalized span texts and their char offsets
-      // into the joined string. We join with a single space to match how we
-      // collapse whitespace in normalizeForMatch.
-      const normalized: string[] = spans.map((s) => normalizeForMatch(s.textContent ?? ""));
+      // Join with single space — matches how normalizeForMatch collapses whitespace
       const joined = normalized.join(" ");
 
       const matchStart = joined.indexOf(needle);
@@ -144,38 +165,163 @@ export function PDFViewer({ pdfData, currentPage: externalPage, highlightExcerpt
     start: number,
     end: number,
   ) {
+    // charCount tracks position in the joined string.
+    // Each span contributes normalized[i].length chars, plus 1 for the joining
+    // space (except after the last span). Since we filtered empty spans above,
+    // every entry here has length > 0 so the math is consistent.
     let charCount = 0;
+    let firstHighlighted: HTMLElement | null = null;
+
     for (let i = 0; i < spans.length; i++) {
       const spanLen = normalized[i].length;
       const spanStart = charCount;
       const spanEnd   = charCount + spanLen;
-      // +1 for the joining space between spans
-      charCount += spanLen + 1;
+      // Advance by spanLen + 1 (the joining space), except for the last span
+      charCount += spanLen + (i < spans.length - 1 ? 1 : 0);
 
       if (spanEnd > start && spanStart < end) {
         spans[i].style.backgroundColor = "rgba(252, 211, 77, 0.40)";
         spans[i].style.borderRadius = "2px";
         spans[i].setAttribute("data-enziu-hl", "true");
+        if (!firstHighlighted) firstHighlighted = spans[i];
       }
     }
 
-    // Scroll the first highlighted span into view
-    const first = document.querySelector<HTMLElement>("[data-enziu-hl]");
-    first?.scrollIntoView({ behavior: "smooth", block: "center" });
+    firstHighlighted?.scrollIntoView({ behavior: "smooth", block: "center" });
   }
 
-  // Apply highlight on excerpt/page change; re-apply when text layer mutates in
+  // ─── Cross-page excerpt search ──────────────────────────────────────────────
+  // When an excerpt is provided, search for it across ALL pages to find the
+  // correct page (handles cover pages, TOC, etc. that cause page offset issues).
+  useEffect(() => {
+    if (!highlightExcerpt || numPages === 0) return;
+
+    const needle = normalizeForMatch(highlightExcerpt);
+    if (!needle || needle.length < 5) {
+      // If excerpt is too short, just navigate to the external page as fallback
+      if (externalPage && externalPage <= numPages) {
+        setPageNumber(externalPage);
+        onPageChange?.(externalPage);
+      }
+      return;
+    }
+
+    // Reset searched pages tracking
+    searchedPagesRef.current = new Set();
+    setIsSearching(true);
+
+    let cancelled = false;
+    let foundPage = false;
+
+    // Try to find excerpt on current page first
+    const tryHighlightCurrentPage = () => {
+      const containers = document.querySelectorAll(".react-pdf__Page__textContent");
+      for (const container of containers) {
+        const allSpans = Array.from(container.querySelectorAll<HTMLElement>("span"));
+        if (!allSpans.length) continue;
+
+        const spans: HTMLElement[] = [];
+        const normalized: string[] = [];
+        for (const span of allSpans) {
+          const n = normalizeForMatch(span.textContent ?? "");
+          if (n.length > 0) {
+            spans.push(span);
+            normalized.push(n);
+          }
+        }
+
+        if (!spans.length) continue;
+        const joined = normalized.join(" ");
+
+        if (joined.includes(needle)) {
+          foundPage = true;
+          setIsSearching(false);
+          // Highlight will be applied by the existing highlight effect
+          return true;
+        }
+
+        // Try shorter prefix as fallback
+        const shortNeedle = needle.slice(0, Math.min(60, needle.length));
+        if (shortNeedle.length >= 10 && joined.includes(shortNeedle)) {
+          foundPage = true;
+          setIsSearching(false);
+          return true;
+        }
+      }
+      return false;
+    };
+
+    // Check current page first
+    const checkAndSearch = async () => {
+      // Give the page a moment to render
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      if (cancelled) return;
+
+      // Try current page
+      if (tryHighlightCurrentPage()) {
+        return;
+      }
+
+      // Search other pages sequentially
+      for (let page = 1; page <= numPages; page++) {
+        if (cancelled || foundPage) break;
+        if (page === pageNumber) continue; // Already checked current page
+
+        searchedPagesRef.current.add(page);
+        setPageNumber(page);
+
+        // Wait for page to render
+        await new Promise(resolve => setTimeout(resolve, 200));
+
+        if (cancelled) return;
+
+        if (tryHighlightCurrentPage()) {
+          break;
+        }
+      }
+
+      // If not found, go back to external page or page 1
+      if (!foundPage && !cancelled) {
+        const fallbackPage = externalPage && externalPage <= numPages ? externalPage : 1;
+        setPageNumber(fallbackPage);
+        onPageChange?.(fallbackPage);
+      }
+
+      setIsSearching(false);
+    };
+
+    checkAndSearch();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [highlightExcerpt, numPages]);
+
+  // Apply highlight on excerpt/page change; re-apply when text layer renders.
+  // FIX: Debounce the MutationObserver callback so we don't try to highlight
+  // a partially-rendered text layer (which would find 0 spans and give up).
   useEffect(() => {
     if (!highlightExcerpt) return;
 
-    // Attempt immediately (text layer may already exist)
+    // Attempt immediately — text layer may already be present (e.g. cached page)
     applyHighlight();
 
-    const observer = new MutationObserver(applyHighlight);
+    const scheduleHighlight = () => {
+      if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current);
+      highlightTimerRef.current = setTimeout(() => {
+        applyHighlight();
+      }, 80); // 80 ms debounce — enough for react-pdf to finish appending spans
+    };
+
+    const observer = new MutationObserver(scheduleHighlight);
     if (containerRef.current) {
       observer.observe(containerRef.current, { childList: true, subtree: true });
     }
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      if (highlightTimerRef.current) clearTimeout(highlightTimerRef.current);
+    };
   }, [highlightExcerpt, pageNumber, applyHighlight]);
 
   if (!pdfData) {
@@ -194,13 +340,20 @@ export function PDFViewer({ pdfData, currentPage: externalPage, highlightExcerpt
       {/* Toolbar */}
       <div className="flex items-center justify-between px-4 py-2 bg-background border-b border-border shrink-0">
         <div className="flex items-center gap-2">
-          <Button variant="ghost" size="sm" onClick={() => goToPage(pageNumber - 1)} disabled={pageNumber <= 1}>
+          <Button variant="ghost" size="sm" onClick={() => goToPage(pageNumber - 1)} disabled={pageNumber <= 1 || isSearching}>
             <ChevronLeft className="h-4 w-4" />
           </Button>
           <span className="text-sm text-muted-foreground min-w-[80px] text-center">
-            Page {pageNumber} of {numPages || "…"}
+            {isSearching ? (
+              <span className="flex items-center justify-center gap-1">
+                <Loader2 className="w-3 h-3 animate-spin" />
+                Searching...
+              </span>
+            ) : (
+              `Page ${pageNumber} of ${numPages || "…"}`
+            )}
           </span>
-          <Button variant="ghost" size="sm" onClick={() => goToPage(pageNumber + 1)} disabled={pageNumber >= numPages}>
+          <Button variant="ghost" size="sm" onClick={() => goToPage(pageNumber + 1)} disabled={pageNumber >= numPages || isSearching}>
             <ChevronRight className="h-4 w-4" />
           </Button>
         </div>

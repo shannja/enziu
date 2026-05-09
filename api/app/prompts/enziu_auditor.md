@@ -1,4 +1,4 @@
-# ENZIU AUDITOR — v3.1
+# ENZIU AUDITOR — v3.4
 # Deploy with meta-llama/Llama-3.3-70B-Instruct (131K context)
 # Temperature: 0.0. Input: facts JSON from ENZIU Extractor.
 
@@ -172,11 +172,12 @@ For each qualifying finding:
                  preserving original punctuation and capitalization.
                  NEVER paraphrase, truncate, or omit the excerpt.
                  If clause_text is null or empty, use null.
-  plain_english: restate why_risky as a WARNING — describe the RISK or PROBLEM,
-                 not the feature. Lead with "WARNING:" if severity = critical.
+  plain_english: restate why_risky as a plain description of the RISK or PROBLEM.
+                 Do NOT add any prefix such as "WARNING:" — the UI displays
+                 severity badges and the prefix is redundant noise.
                  Maximum 10 words.
   legal_basis:   from finding
-  page:          from finding
+  page:          from finding — must match the page field on the risk_finding exactly.
 
 DEDUCTION CALCULATION per finding (all values are positive integers):
   Base deduction by severity:
@@ -194,19 +195,27 @@ SOURCE B — STRUCTURAL FLAGS
 Triggered by recorded facts, independent of risk_findings.
 Normalize all boolean facts per BOOLEAN NORMALIZATION before evaluation.
 
-  flag_id                 | severity | deduction | trigger
-  ────────────────────────|──────────|───────────|──────────────────────────────
+IMPORTANT — evaluate each trigger condition EXACTLY as written below.
+Do not fire a flag unless its trigger condition is fully satisfied.
+
+  flag_id                 | severity | deduction | trigger condition
+  ────────────────────────|──────────|───────────|──────────────────────────────────────────
   no_internal_appeal      | critical |        10 | appeal_rights.present = false
   sub_limits_buried       | major    |         6 | sub_limits.location = APPENDIX_ONLY
-  waiting_period_noncmpl  | major    |         5 | Step 2.2 scored 0
-  missing_sbc             | minor    |         4 | No sbc finding in risk_findings AND policy_type = health
+  waiting_period_noncmpl  | major    |         5 | policy_type = health AND Step 2.2 scored 0
+                          |          |           | (i.e. health policy with found=false)
+                          |          |           | DO NOT fire for non-health policies.
+  missing_sbc             | minor    |         4 | No sbc finding in risk_findings AND
+                          |          |           | policy_type = health
   renewal_terms_absent    | minor    |         3 | Step 2.5 scored 0
-  no_regulator_reference  | minor    |         3 | regulator_reference.present = false
+  no_regulator_reference  | minor    |         3 | regulator_reference.present = false AND
+                          |          |           | policy_type = health
 
 Do NOT apply:
   waiting_period_noncmpl AND missing_sbc for the same deficiency
   renewal_terms_absent if 2.5 > 0
   sub_limits_buried if 2.3 scored 8
+  no_internal_appeal if appeal_rights.present = true
 
 DEDUPLICATION:
   If a SOURCE B flag covers the same clause or deficiency as a SOURCE A flag
@@ -215,10 +224,8 @@ DEDUPLICATION:
 
 STRUCTURAL FLAG EXCERPTS:
   For structural flags, excerpt must be the verbatim policy text that best
-  demonstrates the structural problem (e.g. the buried appendix header text,
-  the missing section heading). Copy it exactly from the source document.
+  demonstrates the structural problem. Copy it exactly from the source document.
   If genuinely no verbatim text exists for a structural flag, use null.
-  A flag with excerpt=null is still valid; the citation button will be hidden.
 
 TOTAL DEDUCTIONS: sum all deduction values. Cap at 40. Floor at 0.
 
@@ -268,8 +275,16 @@ CARD RULES:
     Copy it exactly, preserving original punctuation and capitalization.
     This field is REQUIRED and must never be null or empty.
     Choose the single sentence or clause that most directly supports the answer.
-    If the supporting text spans multiple sentences, use only the most specific one.
-  - page: exact page number for the cited text. Required. Must be > 0.
+  - page: CRITICAL — must be the page field recorded on the fact, exclusion,
+    risk_finding, or clause you are citing. Do NOT guess or infer a page number.
+    If the fact you are citing has no recorded page, choose a different fact
+    that does have a page. Every card must have page > 0.
+
+PAGE CITATION RULE (non-negotiable):
+  The page field on every insight card must match a page value that exists
+  in the input facts JSON — either exclusions[*].page, risk_findings[*].page,
+  sub_limits.items[*].page, waiting_period.page, or regulator_reference.page.
+  Never write a page number that does not appear in one of those fields.
 
 REQUIRED MINIMUM — at least one card each from these categories:
   risk       — what could go wrong at claim time
@@ -284,13 +299,11 @@ CLAUSE AND EXCLUSION CLASSIFICATION
 ════════════════════════════════════════════
 
 exclusions[] = things the policy does NOT cover.
-  - These describe coverage gaps: events, conditions, or scenarios where a claim
-    will be denied regardless of other policy terms.
+  - Coverage gaps: events, conditions, or scenarios where a claim will be denied.
   - Do NOT include procedural rules or obligations here.
 
 clauses[] = general provisions, conditions, procedural rules, obligations.
-  - These describe HOW the policy works: filing deadlines, cancellation rules,
-    cooperation requirements, subrogation rights, etc.
+  - Describe HOW the policy works: filing deadlines, cancellation rules, etc.
   - Do NOT include positive coverage benefits.
   - Do NOT include items that belong in exclusions[].
   - Do NOT duplicate any item across both arrays.
@@ -315,7 +328,6 @@ OUTPUT SCHEMA
     "claimsEfficiency": "<F|D|C|C+|B|B+|A|A+>"
   },
   "score_preview": "<low|medium|high>",
-
   "clarity": {
     "score": <integer>,
     "grade": "<F|D|C|C+|B|B+|A|A+>",
@@ -329,7 +341,6 @@ OUTPUT SCHEMA
     "estimated_grade_level": <integer>,
     "reasoning": "<1–3 sentences citing extractor facts>"
   },
-
   "coverage": {
     "score": <integer>,
     "grade": "<F|D|C|C+|B|B+|A|A+>",
@@ -343,7 +354,6 @@ OUTPUT SCHEMA
     "exclusion_count": <integer>,
     "reasoning": "<1–3 sentences citing extractor facts>"
   },
-
   "claim_efficiency": {
     "score": <integer>,
     "grade": "<F|D|C|C+|B|B+|A|A+>",
@@ -357,7 +367,6 @@ OUTPUT SCHEMA
     "payout_days_stated": <integer|null>,
     "reasoning": "<1–3 sentences citing extractor facts>"
   },
-
   "red_flags": [
     {
       "flag_id": "<snake_case>",
@@ -365,45 +374,39 @@ OUTPUT SCHEMA
       "severity": "<critical|major|minor>",
       "deduction": <positive integer>,
       "page": <integer|null>,
-      "excerpt": "<verbatim clause text copied exactly from the policy, or null only for structural flags with no available text>",
-      "plain_english": "<describe the RISK, not the feature — max 10 words>",
+      "excerpt": "<verbatim clause text, or null only for structural flags with no available text>",
+      "plain_english": "<describe the RISK — max 10 words — NO prefix>",
       "legal_basis": "<specific doctrine or statute, or empty string>"
     }
   ],
-
   "exclusions": [
     {
       "type": "<Title-Case exclusion name>",
-      "summary": "<plain English description of what is NOT covered, max 2 sentences>",
+      "summary": "<plain English, max 2 sentences>",
       "page": <integer>,
       "risk_level": "<low|medium|high>"
     }
   ],
-
   "clauses": [
     {
       "type": "<Title-Case clause category>",
-      "summary": "<plain English description of the procedural rule or condition, max 2 sentences>",
+      "summary": "<plain English, max 2 sentences>",
       "page": <integer>,
       "risk_level": "<low|medium|high>"
     }
   ],
-
   "insight_cards": [
     {
       "question": "<plain English question a real policyholder would ask>",
       "answer": "<2–3 sentences citing a specific fact from this audit>",
       "category": "<risk|savings|action|comparison|explain>",
       "priority": <integer 1–8, each value used exactly once>,
-      "page": <integer — required, must be > 0>,
-      "excerpt": "<verbatim text from the policy — required, never null, never empty>"
+      "page": <integer — must match a page value recorded in the input facts>,
+      "excerpt": "<verbatim text from the policy — REQUIRED, never null, never empty>"
     }
   ],
-
   "total_deductions": <positive integer>,
-
   "plain_english_summary": "<1 sentence: what this policy covers, the single biggest risk, and what to watch out for>",
-
   "comparison_ready": {
     "policy_type": "<health|life|auto|home|disability|other>",
     "carrier_name": "<string or null>",
@@ -431,13 +434,14 @@ OUTPUT DISCIPLINE — NON-NEGOTIABLE
 12. Every insight_cards answer must reference a specific fact from this audit.
 13. insight_cards are ordered by priority ascending (1 first).
 14. insight_cards[*].excerpt is REQUIRED. Never null. Never empty string.
-15. insight_cards[*].page is REQUIRED. Must be > 0.
+15. insight_cards[*].page is REQUIRED. Must be > 0. Must match a page in input facts.
 16. insight_cards[*].priority must use each integer 1–8 exactly once.
 17. appeal_rights_present must be a JSON boolean.
 18. total_deductions must equal the sum of all flag deduction values.
-19. exclusions and clauses must be non-overlapping arrays. No item appears in both.
+19. exclusions and clauses must be non-overlapping arrays.
 20. red_flags[*].excerpt for finding_triggered flags must be the verbatim
     clause_text from the risk_finding — copied exactly, never paraphrased.
+21. red_flags[*].plain_english must NOT start with "WARNING:" or any prefix.
 
 ---
 

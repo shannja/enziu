@@ -17,6 +17,8 @@ interface VoucherRecoveryProps {
   onRecoveryComplete: (data: RecoveryVaultData) => void;
 }
 
+const VOUCHER_REGEX = /^ENZ-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{2}$/;
+
 export function VoucherRecovery({ onRecoveryComplete }: VoucherRecoveryProps) {
   const [voucherCode, setVoucherCode] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -26,39 +28,30 @@ export function VoucherRecovery({ onRecoveryComplete }: VoucherRecoveryProps) {
     const code = voucherCode.trim().toUpperCase();
     if (!code) return;
 
+    if (!VOUCHER_REGEX.test(code)) {
+      setError("Invalid voucher format. Expected: ENZ-XXXX-XXXX-XXXX-XX");
+      return;
+    }
+
     setIsLoading(true);
     setError(null);
 
     try {
-      // Step 1: Validate voucher with server
-      const res = await fetch("/api/voucher/check", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ code, passphrase: "" }),  // server validates code existence
-      });
-
-      const result = await res.json();
-
-      if (!result.valid && result.error === "Invalid voucher code format") {
-        setError("Invalid voucher format. Expected: ENZ-XXXX-XXXX-XXXX-XX");
-        setIsLoading(false);
+      const local = await getRecoveryVault(code);
+      if (local) {
+        onRecoveryComplete(local);
         return;
       }
 
-      // Step 2: Decrypt from IndexedDB
-      const vaultData = await getRecoveryVault(code);
-
-      if (!vaultData) {
-        setError("No saved report found for this voucher. The report data may have expired or been cleared.");
-        setIsLoading(false);
-        return;
-      }
-
-      // Success — pass data up
-      onRecoveryComplete(vaultData);
+      setError(
+        "No report found for this voucher on this device. " +
+        "Reports are stored only in your browser — they cannot be recovered " +
+        "after clearing browser data or on a different device. " +
+        "Please re-upload your policy PDF to generate a new report."
+      );
     } catch (err) {
-      console.error("Recovery error:", err);
-      setError("Could not verify voucher or load report. Please try again.");
+      console.error("[VoucherRecovery] IndexedDB error:", err);
+      setError("Could not read local storage. Please try again.");
     } finally {
       setIsLoading(false);
     }
@@ -74,7 +67,7 @@ export function VoucherRecovery({ onRecoveryComplete }: VoucherRecoveryProps) {
       </CardHeader>
       <CardContent className="space-y-4">
         <p className="text-sm text-muted-foreground text-center">
-          Enter your voucher code to restore your full report instantly.
+          Enter your voucher code to restore your report from this device.
         </p>
 
         <input
@@ -105,7 +98,7 @@ export function VoucherRecovery({ onRecoveryComplete }: VoucherRecoveryProps) {
           {isLoading ? (
             <span className="flex items-center gap-2">
               <Loader2 className="w-4 h-4 animate-spin" />
-              Recovering…
+              Checking…
             </span>
           ) : (
             "Restore Report"
@@ -113,7 +106,7 @@ export function VoucherRecovery({ onRecoveryComplete }: VoucherRecoveryProps) {
         </Button>
 
         <p className="text-xs text-center text-muted-foreground">
-          Your report is stored encrypted in your browser. No re-upload needed.
+          Your report is stored encrypted on this device only. Nothing is sent to our servers.
         </p>
       </CardContent>
     </Card>

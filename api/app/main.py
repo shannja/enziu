@@ -44,6 +44,16 @@ from .services.voucher import VoucherService
 logger = logging.getLogger("main")
 logger.setLevel(logging.DEBUG if settings.debug else logging.INFO)
 
+if not logger.handlers:
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.DEBUG)
+    formatter = logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
+
 # ---------------------------------------------------------------------------
 # Services
 # ---------------------------------------------------------------------------
@@ -80,7 +90,6 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
@@ -89,18 +98,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Security
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(InputValidationMiddleware)
 app.add_middleware(APIKeyMiddleware)
 
-# Rate limiting
 app.add_middleware(SlowAPIMiddleware)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 
-# Routers
-app.include_router(paddle_service.get_router())  # mounts /api/paddle/*
+app.include_router(paddle_service.get_router())
 
 
 # ===========================================
@@ -116,7 +122,6 @@ async def health_check(request: Request) -> dict:
 @limiter.limit(RATE_LIMITS["health"])
 @app.get("/api/debug/config")
 async def debug_config(request: Request) -> dict:
-    """Debug endpoint — only useful in development."""
     return {
         "inference_api_key": (
             settings.inference_api_key[:20] + "..."
@@ -138,10 +143,13 @@ async def debug_config(request: Request) -> dict:
 @app.post("/api/extract", response_model=None)
 async def extract_policy(request: Request, file: UploadFile = File(...)):
     """
-    Extract text from an insurance policy PDF.
+    Extract text from an insurance policy PDF and run the full two-phase audit.
+
+    Single-pass architecture: both extraction and audit run here so the full
+    report is available immediately after payment — no second inference call.
+    The full_report is returned to the client for encrypted IndexedDB caching.
+
     ZERO DISK WRITE — processed entirely in memory via io.BytesIO.
-    Returns extracted_text + free sneak-peek analysis; full report requires payment.
-    
     Scanned documents are NOT supported (no OCR).
     """
     start_time = time.time()
@@ -159,11 +167,9 @@ async def extract_policy(request: Request, file: UploadFile = File(...)):
 
         session_id = str(uuid.uuid4())
 
-        # Get metadata first for scan detection
         metadata = pdf_extractor.get_metadata(buffer)
-        buffer.seek(0)  # Reset buffer after metadata extraction
+        buffer.seek(0)
 
-        # Reject scanned documents (no OCR support)
         if metadata.is_scanned:
             logger.warning(f"Scanned document rejected - session={session_id}")
             raise HTTPException(
@@ -171,10 +177,8 @@ async def extract_policy(request: Request, file: UploadFile = File(...)):
                 detail="Scanned documents are not supported in this version. Please upload a digital PDF."
             )
 
-        # Extract text using PyMuPDF — JSON format for accurate LLM citations
         extracted_text = pdf_extractor.extract_text_json(buffer)
 
-        # Reject if no text extracted (scanned or image-based PDF)
         if not extracted_text or len(extracted_text.strip()) == 0:
             raise HTTPException(
                 status_code=400,
@@ -183,16 +187,9 @@ async def extract_policy(request: Request, file: UploadFile = File(...)):
 
         logger.info(f"Text extracted — {len(extracted_text)} chars")
 
-        # Run sneak peek inference using the cheaper model (Qwen 14B)
+        # Run full two-phase audit (extractor + auditor). analyze_sneak_peek
+        # runs process_document internally and caches the full report.
         sneak_peek = await inference_client.analyze_sneak_peek(extracted_text, session_id)
-
-        # Store session metadata (NOT extracted text - client stores that)
-        await inference_client.store_session(session_id, {
-            "mode": "customer",
-            "created_at": time.time(),
-            "expires_at": time.time() + 3600,
-            "chats_remaining": 5,
-        })
 
         elapsed = time.time() - start_time
         logger.info(
@@ -201,7 +198,9 @@ async def extract_policy(request: Request, file: UploadFile = File(...)):
             f"time={elapsed:.3f}s"
         )
 
-        # Return extracted_text + sneak peek - client stores both
+        # Return extracted_text + sneak peek preview + full_report for client
+        # to store encrypted in IndexedDB. The full_report enables instant
+        # report display after payment without a second server round-trip.
         response_data: dict[str, Any] = {
             "session_id": session_id,
             "extracted_text": extracted_text,
@@ -217,8 +216,6 @@ async def extract_policy(request: Request, file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=f"Processing failed: {e}")
 
 
-
-
 # ===========================================
 # Voucher
 # ===========================================
@@ -228,10 +225,6 @@ async def extract_policy(request: Request, file: UploadFile = File(...)):
 async def validate_voucher(
     request: Request, body: VoucherValidationRequest
 ) -> VoucherValidationResponse:
-    """
-    Validate a voucher code + passphrase.
-    1. Format check  2. Redis lookup  3. Bcrypt verify  4. Credit check
-    """
     try:
         result = await voucher_service.validate(
             code=body.code, passphrase=body.passphrase
@@ -251,7 +244,10 @@ async def validate_voucher(
 async def recover_voucher(
     request: Request, body: VoucherRecoveryRequest
 ) -> JSONResponse:
-    """Recover a lost voucher code using passphrase only. No email required."""
+    """
+    Recover a lost voucher using the passphrase (which is the session_id).
+    Returns the session_id so the client can re-fetch the cached report.
+    """
     try:
         result = await voucher_service.recover(passphrase=body.passphrase)
         return JSONResponse(content=result)
@@ -264,7 +260,6 @@ async def recover_voucher(
 async def decrement_credits(
     request: Request, session_id: str, code: str
 ) -> JSONResponse:
-    """Atomically decrement voucher credits — prevents double-spending."""
     try:
         result = await voucher_service.decrement(code)
         return JSONResponse(content=result)
@@ -273,105 +268,77 @@ async def decrement_credits(
 
 
 # ===========================================
-# Policy Audit (Single-Shot, Llama 4 Scout)
+# Policy Audit (re-fetch from server cache)
 # ===========================================
 
 @limiter.limit(RATE_LIMITS["upload"])
 @app.post("/api/policy/audit", response_model=AuditResponse)
 async def audit_policy(request: Request, body: AuditRequest) -> AuditResponse:
     """
-    Generate a Master Policy Fact Sheet using single-shot inference.
-    Llama 4 Scout's 890K context handles the full policy in one call.
+    Return the cached full report for a session.
+
+    Primary use-case: voucher recovery on a new device where IndexedDB is empty.
+    The inference_client._report_cache holds the report for the process lifetime.
+    If the cache has expired (server restart), the client must re-upload the PDF.
+
+    Note: extracted_text may be empty string for cache-only lookups.
     """
     logger.info(f"audit_policy() - session={body.session_id}, text_length={len(body.extracted_text)}")
-    
-    # Validate input
-    if not body.extracted_text or len(body.extracted_text.strip()) == 0:
-        raise HTTPException(status_code=400, detail="No policy text provided")
-    
-    # Check for suspiciously large text (potential abuse)
-    if len(body.extracted_text) > 1_500_000:  # 1.5MB limit for text
-        logger.warning(f"Extracted text too large: {len(body.extracted_text)} bytes")
+
+    # Cache hit — return immediately without re-running inference
+    if body.session_id in inference_client._report_cache:
+        cached = inference_client._report_cache[body.session_id]
+        logger.info(f"audit_policy() cache hit — session={body.session_id}")
+        return AuditResponse(session_id=body.session_id, report=cached)
+
+    # Cache miss and no text provided — report has expired
+    if not body.extracted_text or not body.extracted_text.strip():
+        raise HTTPException(
+            status_code=404,
+            detail="Report not found in server cache. Please re-upload your policy PDF."
+        )
+
+    if len(body.extracted_text) > 1_500_000:
         raise HTTPException(status_code=413, detail="Policy text too large")
-    
+
     start_time = time.time()
-    
     try:
-        # Process document using Map-Reduce
         fact_sheet = await inference_client.process_document(
             text=body.extracted_text,
             session_id=body.session_id,
         )
-        
         elapsed = time.time() - start_time
-        grade_val = fact_sheet.get('grade', {})
-        if isinstance(grade_val, dict):
-            grade_str = grade_val.get('overall', 'unknown')
-        else:
-            grade_str = str(grade_val) if grade_val else 'unknown'
-        logger.info(
-            f"Policy audit completed - "
-            f"session={body.session_id}, "
-            f"time={elapsed:.2f}s, "
-            f"grade={grade_str}"
-        )
-        
-        return AuditResponse(
-            session_id=body.session_id,
-            report=fact_sheet,
-        )
-        
+        grade_val = fact_sheet.get("grade", {})
+        grade_str = grade_val.get("overall", "unknown") if isinstance(grade_val, dict) else str(grade_val)
+        logger.info(f"Policy audit completed - session={body.session_id}, time={elapsed:.2f}s, grade={grade_str}")
+        return AuditResponse(session_id=body.session_id, report=fact_sheet)
+
     except HTTPException:
         raise
     except Exception as e:
         elapsed = time.time() - start_time
         logger.error(f"Policy audit failed after {elapsed:.2f}s: {type(e).__name__}: {e}")
-        
-        # Provide specific error messages
         error_detail = str(e)
         if "timeout" in error_detail.lower():
-            raise HTTPException(
-                status_code=408,
-                detail="Audit timed out. The policy may be too large. Please try again.",
-            )
+            raise HTTPException(status_code=408, detail="Audit timed out. Please try again.")
         elif "rate limit" in error_detail.lower() or "429" in error_detail:
-            raise HTTPException(
-                status_code=429,
-                detail="Rate limit exceeded. Please wait before trying again.",
-            )
+            raise HTTPException(status_code=429, detail="Rate limit exceeded. Please wait before trying again.")
         else:
-            raise HTTPException(
-                status_code=500,
-                detail=f"Audit failed: {error_detail}",
-            )
+            raise HTTPException(status_code=500, detail=f"Audit failed: {error_detail}")
 
 
-# ===========================================
-# Session
-# ===========================================
-
-# ===========================================
 # ===========================================
 # Payment Status Check
 # ===========================================
 
 @limiter.limit(RATE_LIMITS["general"])
 @app.get("/api/paddle/status")
-async def check_payment_status(request: Request, session_id: str) -> dict[str, bool]:
-    """
-    Check if a session has been paid for.
-    Used for disconnect recovery - client checks if payment completed.
-    """
-    logger.info(f"check_payment_status() - session={session_id}")
-    
-    try:
-        # Check Redis for payment flag
-        # In development mode without Redis, always return False
-        paid = await inference_client.check_session_payment(session_id)
-        return {"paid": paid}
-    except Exception as e:
-        logger.error(f"Payment status check failed: {e}")
-        return {"paid": False}
+async def check_payment_status(request: Request, session_id: str) -> dict:
+    return {
+        "paid": False,
+        "client_managed": True,
+        "message": "Payment status is managed client-side. Check IndexedDB for 'enziu_payment' key."
+    }
 
 
 # ===========================================
@@ -381,9 +348,8 @@ async def check_payment_status(request: Request, session_id: str) -> dict[str, b
 @limiter.limit(RATE_LIMITS["general"])
 @app.post("/api/session/end")
 async def end_session(request: Request, session_id: str) -> JSONResponse:
-    """End a session and wipe all associated data permanently."""
     try:
         await inference_client.end_session(session_id)
     except Exception:
-        pass  # Return success even if session doesn't exist
+        pass
     return JSONResponse(content={"status": "deleted"})

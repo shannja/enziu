@@ -23,8 +23,8 @@ const STORE_NAME = 'vault';
 interface VaultRecord {
   sessionId: string;
   pdfBlob?: Blob;
-  extractedText?: string;
-  factSheet?: any;  // Master Policy Fact Sheet from Map-Reduce
+  extractedText?: string | EncryptedPayload;  // plaintext or encrypted
+  factSheet?: any | EncryptedPayload;  // Master Policy Fact Sheet from Map-Reduce
   createdAt: number;
 }
 
@@ -260,6 +260,229 @@ export async function getEncryptedFactSheet(sessionId: string): Promise<any | nu
   });
 }
 
+// ── Encrypted text storage ────────────────────────────────────────────────────
+
+/**
+ * Store extracted text in IndexedDB with AES-256-GCM encryption.
+ * The text is encrypted using a key derived from the session ID via PBKDF2.
+ * This ensures the text appears as random bytes in browser inspector.
+ * 
+ * @param sessionId - Unique session identifier (used as encryption key basis)
+ * @param extractedText - The extracted text from the PDF
+ * @returns Promise that resolves when stored
+ */
+export async function storeEncryptedText(sessionId: string, extractedText: string): Promise<void> {
+  const db = await openDB();
+
+  // Generate random salt and IV for this encryption operation
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+
+  // Derive encryption key from session ID
+  const key = await deriveSessionKey(sessionId, salt);
+
+  // Encrypt the payload
+  const encoder = new TextEncoder();
+  const plaintext = encoder.encode(extractedText);
+  const ciphertext = await crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv: iv.buffer as ArrayBuffer },
+    key,
+    plaintext
+  );
+
+  // Prepare encrypted payload
+  const encryptedPayload: EncryptedPayload = {
+    salt: Array.from(salt),
+    iv: Array.from(iv),
+    ciphertext: Array.from(new Uint8Array(ciphertext)),
+    createdAt: Date.now(),
+  };
+
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction([STORE_NAME], 'readwrite');
+    const store = transaction.objectStore(STORE_NAME);
+
+    // First check if a record already exists
+    const getRequest = store.get(sessionId);
+
+    getRequest.onsuccess = () => {
+      const existing = getRequest.result as VaultRecord | undefined;
+      const record: VaultRecord = existing || { sessionId, createdAt: Date.now() };
+      record.extractedText = encryptedPayload;  // Store as encrypted blob
+      record.createdAt = Date.now();
+
+      const putRequest = store.put(record);
+      putRequest.onsuccess = () => resolve();
+      putRequest.onerror = () => reject(putRequest.error);
+    };
+
+    getRequest.onerror = () => reject(getRequest.error);
+
+    transaction.oncomplete = () => db.close();
+  });
+}
+
+/**
+ * Retrieve and decrypt extracted text from IndexedDB.
+ * Returns null if no encrypted text found or decryption fails.
+ * 
+ * @param sessionId - Unique session identifier (used to derive decryption key)
+ * @returns Promise that resolves to the decrypted extracted text or null
+ */
+export async function getEncryptedText(sessionId: string): Promise<string | null> {
+  const db = await openDB();
+
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction([STORE_NAME], 'readonly');
+    const store = transaction.objectStore(STORE_NAME);
+
+    const request = store.get(sessionId);
+
+    request.onsuccess = async () => {
+      const result = request.result as VaultRecord | undefined;
+      if (!result || !result.extractedText) {
+        resolve(null);
+        return;
+      }
+
+      const extractedText = result.extractedText;
+
+      // If it's a string, it's plaintext (fallback for unencrypted storage)
+      if (typeof extractedText === 'string') {
+        resolve(extractedText);
+        return;
+      }
+
+      // Check if it's an encrypted payload (has salt, iv, ciphertext)
+      if (!extractedText.salt || !extractedText.iv || !extractedText.ciphertext) {
+        resolve(null);
+        return;
+      }
+
+      try {
+        const salt = new Uint8Array(extractedText.salt);
+        const iv = new Uint8Array(extractedText.iv);
+        const ciphertext = new Uint8Array(extractedText.ciphertext);
+
+        // Derive decryption key from session ID
+        const key = await deriveSessionKey(sessionId, salt);
+
+        // Decrypt the payload
+        const plaintext = await crypto.subtle.decrypt(
+          { name: 'AES-GCM', iv: iv.buffer as ArrayBuffer },
+          key,
+          ciphertext
+        );
+
+        const decoder = new TextDecoder();
+        resolve(decoder.decode(plaintext));
+      } catch (error) {
+        // Decryption failed — corrupted data or wrong session
+        console.error('[getEncryptedText] Decryption failed:', error);
+        resolve(null);
+      }
+    };
+
+    request.onerror = () => reject(request.error);
+    transaction.oncomplete = () => db.close();
+  });
+}
+
+// ── SessionStorage encryption helpers ─────────────────────────────────────────
+
+/**
+ * Interface for the encrypted payload stored in sessionStorage as a JSON string.
+ */
+interface SessionStorageEncryptedPayload {
+  salt: number[];
+  iv: number[];
+  ciphertext: number[];
+}
+
+/**
+ * Encrypt text for storage in sessionStorage.
+ * Returns a JSON string containing the encrypted payload (salt, iv, ciphertext).
+ * The encrypted data is base64-encoded within the JSON for string storage.
+ * 
+ * @param text - The plaintext to encrypt
+ * @param sessionId - Session identifier used for key derivation
+ * @returns JSON string containing the encrypted payload
+ */
+export async function encryptForSessionStorage(text: string, sessionId: string): Promise<string> {
+  // Generate random salt and IV for this encryption operation
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+
+  // Derive encryption key from session ID
+  const key = await deriveSessionKey(sessionId, salt);
+
+  // Encrypt the payload
+  const encoder = new TextEncoder();
+  const plaintext = encoder.encode(text);
+  const ciphertext = await crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv: iv.buffer as ArrayBuffer },
+    key,
+    plaintext
+  );
+
+  // Prepare encrypted payload as JSON string
+  const encryptedPayload: SessionStorageEncryptedPayload = {
+    salt: Array.from(salt),
+    iv: Array.from(iv),
+    ciphertext: Array.from(new Uint8Array(ciphertext)),
+  };
+
+  return JSON.stringify(encryptedPayload);
+}
+
+/**
+ * Decrypt text from sessionStorage.
+ * Accepts either an encrypted JSON payload or plaintext (for backward compatibility).
+ * 
+ * @param encryptedData - The JSON string from sessionStorage or plaintext
+ * @param sessionId - Session identifier used for key derivation
+ * @returns The decrypted plaintext, or the original string if not encrypted
+ */
+export async function decryptFromSessionStorage(
+  encryptedData: string | null,
+  sessionId: string
+): Promise<string | null> {
+  if (!encryptedData) return null;
+
+  // Try to parse as encrypted payload
+  try {
+    const payload = JSON.parse(encryptedData) as SessionStorageEncryptedPayload;
+
+    // Check if it looks like an encrypted payload
+    if (!payload.salt || !payload.iv || !payload.ciphertext) {
+      // Not an encrypted payload, return as-is (backward compatibility)
+      return encryptedData;
+    }
+
+    const salt = new Uint8Array(payload.salt);
+    const iv = new Uint8Array(payload.iv);
+    const ciphertext = new Uint8Array(payload.ciphertext);
+
+    // Derive decryption key from session ID
+    const key = await deriveSessionKey(sessionId, salt);
+
+    // Decrypt the payload
+    const plaintext = await crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv: iv.buffer as ArrayBuffer },
+      key,
+      ciphertext
+    );
+
+    const decoder = new TextDecoder();
+    return decoder.decode(plaintext);
+  } catch (error) {
+    // If parsing fails, it's likely plaintext (backward compatibility)
+    // Or decryption failed - return the original data
+    console.error('[decryptFromSessionStorage] Decryption failed:', error);
+    return encryptedData;
+  }
+}
+
 interface RecoveryVaultData {
   factSheet: any;
   extractedText: string;
@@ -473,8 +696,9 @@ export async function getPDF(sessionId: string): Promise<Blob | null> {
 }
 
 /**
- * Retrieve extracted text from IndexedDB
+ * Retrieve extracted text from IndexedDB (unencrypted)
  * 
+ * @deprecated Use getEncryptedText for secure retrieval
  * @param sessionId - Unique session identifier
  * @returns Promise that resolves to the extracted text or null
  */
@@ -489,7 +713,13 @@ export async function getText(sessionId: string): Promise<string | null> {
     
     request.onsuccess = () => {
       const result = request.result as VaultRecord | undefined;
-      resolve(result?.extractedText || null);
+      const text = result?.extractedText;
+      // Only return if it's a string (plaintext), not an encrypted payload
+      if (typeof text === 'string') {
+        resolve(text);
+      } else {
+        resolve(null);
+      }
     };
     request.onerror = () => reject(request.error);
     

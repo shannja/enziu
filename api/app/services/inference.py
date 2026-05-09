@@ -8,7 +8,7 @@ Two-phase policy audit architecture:
 
   Phase 2 — ENZIU_AUDITOR (Llama 3.3 70B, 131K context):
     Scores facts and generates the full ENZIU report.
-    Input: cached facts JSON. Output: full report with insight cards.
+    Input: cached facts JSON. Output: full report including insight_cards.
 
 Single-pass architecture: Both phases run during sneak peek, full report
 is cached and reused to prevent drift between preview and final output.
@@ -31,8 +31,18 @@ from ..prompts import ENZIU_EXTRACTOR_PROMPT, ENZIU_AUDITOR_PROMPT
 logger = logging.getLogger("inference")
 logger.setLevel(logging.DEBUG if settings.debug else logging.INFO)
 
+if not logger.handlers:
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.DEBUG)
+    formatter = logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
+
 # ---------------------------------------------------------------------------
-# Prompt injection patterns — stripped from all user-controlled text
+# Prompt injection patterns
 # ---------------------------------------------------------------------------
 _INJECTION_PATTERNS = [
     re.compile(r"ignore\s+(all\s+)?(previous|prior|above|foregoing)\s+instructions?", re.IGNORECASE),
@@ -48,7 +58,6 @@ _INJECTION_PATTERNS = [
 
 
 def _sanitize_injected_text(text: str, source: str = "") -> str:
-    """Strip prompt injection patterns from user-controlled text."""
     if not text:
         return text
     cleaned = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", text)
@@ -70,11 +79,6 @@ def _sanitize_injected_text(text: str, source: str = "") -> str:
 # ---------------------------------------------------------------------------
 
 def _to_bool(value: Any) -> bool:
-    """
-    Normalize boolean fields that LLMs may emit as strings.
-    Treats true/"true"/"TRUE"/"YES"/"yes"/1 as True.
-    Treats false/"false"/"FALSE"/"NO"/"no"/0/null/None as False.
-    """
     if isinstance(value, bool):
         return value
     if isinstance(value, int):
@@ -85,24 +89,15 @@ def _to_bool(value: Any) -> bool:
 
 
 def _normalize_facts_booleans(facts: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Walk the facts dict and coerce all known boolean fields to real Python bools.
-    This is a defensive pass — it fixes string booleans emitted by the LLM
-    despite the prompt instructing otherwise.
-    """
-    # Top-level YES/NO string fields — keep as strings (Auditor reads them as
-    # strings and normalizes itself), but ensure uppercase.
     for key in ("definitions_section", "table_of_contents", "section_numbering",
                 "page_cross_references"):
         if key in facts and isinstance(facts[key], str):
             facts[key] = facts[key].strip().upper()
 
-    # waiting_period.found
     wp = facts.get("waiting_period")
     if isinstance(wp, dict) and "found" in wp:
         wp["found"] = _to_bool(wp["found"])
 
-    # appeal_rights.present, appeal_rights.timeline_days_stated
     ar = facts.get("appeal_rights")
     if isinstance(ar, dict):
         if "present" in ar:
@@ -110,12 +105,10 @@ def _normalize_facts_booleans(facts: Dict[str, Any]) -> Dict[str, Any]:
         if "timeline_days_stated" in ar:
             ar["timeline_days_stated"] = _to_bool(ar["timeline_days_stated"])
 
-    # payout_timeline.found
     pt = facts.get("payout_timeline")
     if isinstance(pt, dict) and "found" in pt:
         pt["found"] = _to_bool(pt["found"])
 
-    # regulator_reference.present
     rr = facts.get("regulator_reference")
     if isinstance(rr, dict) and "present" in rr:
         rr["present"] = _to_bool(rr["present"])
@@ -124,25 +117,17 @@ def _normalize_facts_booleans(facts: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _normalize_report_booleans(report: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Normalize boolean fields in the Auditor's output report.
-    Specifically fixes appeal_rights_present which must be a real bool.
-    Also ensures total_deductions is a positive integer.
-    """
     ce = report.get("claim_efficiency")
     if isinstance(ce, dict) and "appeal_rights_present" in ce:
         ce["appeal_rights_present"] = _to_bool(ce["appeal_rights_present"])
 
-    # Ensure total_deductions is a non-negative integer
     td = report.get("total_deductions")
     if td is not None:
         try:
-            td_int = int(td)
-            report["total_deductions"] = abs(td_int)  # always positive
+            report["total_deductions"] = abs(int(td))
         except (TypeError, ValueError):
             report["total_deductions"] = 0
 
-    # Ensure each red_flag deduction is a positive integer
     for flag in report.get("red_flags", []):
         if isinstance(flag, dict) and "deduction" in flag:
             try:
@@ -153,117 +138,119 @@ def _normalize_report_booleans(report: Dict[str, Any]) -> Dict[str, Any]:
     return report
 
 
+def _validate_insight_cards(cards: Any) -> list:
+    """
+    Validate and normalise the insight_cards array from the Auditor.
+    Returns a clean list — invalid entries are dropped with a warning rather
+    than discarding the entire array.
+
+    Required fields per card: question, answer, category, priority, page, excerpt.
+    We only hard-drop cards whose page is missing or zero (they cannot be cited).
+    All other fields fall back to safe defaults so the frontend never crashes.
+    """
+    if not isinstance(cards, list):
+        logger.warning("insight_cards is not a list — returning empty array")
+        return []
+
+    valid = []
+    seen_priorities: set[int] = set()
+
+    for i, card in enumerate(cards):
+        if not isinstance(card, dict):
+            logger.warning(f"insight_cards[{i}] is not a dict — skipping")
+            continue
+
+        page = card.get("page")
+        if not isinstance(page, int) or page <= 0:
+            logger.warning(f"insight_cards[{i}] has invalid page={page!r} — skipping")
+            continue
+
+        excerpt = card.get("excerpt", "")
+        if not excerpt or not str(excerpt).strip():
+            # Auditor prompt requires excerpt; log but keep the card — page citation
+            # still works, text highlight simply won't fire.
+            logger.warning(f"insight_cards[{i}] has empty excerpt — keeping card with empty string")
+            excerpt = ""
+
+        priority = card.get("priority")
+        if not isinstance(priority, int) or priority < 1 or priority > 8:
+            # Assign a fallback priority that doesn't collide
+            priority = i + 1
+            logger.warning(f"insight_cards[{i}] has invalid priority — reassigning to {priority}")
+        if priority in seen_priorities:
+            priority = max(seen_priorities) + 1
+            logger.warning(f"insight_cards[{i}] duplicate priority — reassigning to {priority}")
+        seen_priorities.add(priority)
+
+        valid.append({
+            "question": str(card.get("question") or ""),
+            "answer":   str(card.get("answer")   or ""),
+            "category": str(card.get("category") or "explain"),
+            "priority": priority,
+            "page":     page,
+            "excerpt":  str(excerpt),
+        })
+
+    logger.info(f"insight_cards validated: {len(valid)}/{len(cards)} cards kept")
+    return valid
+
+
 def _validate_and_fix_report(report: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Validate and fix the Auditor's output report for consistency.
-    
-    This function:
-    1. Filters out finding_triggered red flags with empty excerpts (structural flags allow null)
-    2. Filters out insight cards with empty excerpts (per prompt: must have page citation)
-    3. Recalculates enziu_index to ensure mathematical consistency
-    4. Recalculates grade to match the index
-    5. Recalculates total_deductions from remaining flags
-    """
-    # 1. Filter out finding_triggered red flags with empty excerpts
-    # Per prompt: finding_triggered flags require verbatim excerpt
-    # Structural flags may have excerpt=null (no verbatim text available)
+    # ── Red flags ──────────────────────────────────────────────────────────
+    # Filter red flags: structural can have null excerpt, finding_triggered cannot.
     red_flags = report.get("red_flags", [])
     valid_red_flags = []
     for flag in red_flags:
-        if isinstance(flag, dict):
-            source = flag.get("source", "")
-            excerpt = flag.get("excerpt")
-            
-            # Structural flags can have null excerpt per v3.0 spec
-            if source == "structural":
-                valid_red_flags.append(flag)
-            # Finding-triggered flags require non-empty excerpt
-            elif excerpt and excerpt.strip():
-                valid_red_flags.append(flag)
-            else:
-                logger.warning(
-                    f"Removing red flag '{flag.get('flag_id', 'unknown')}' "
-                    f"due to empty excerpt (source: {source})"
-                )
+        if not isinstance(flag, dict):
+            continue
+        source = flag.get("source", "")
+        excerpt = flag.get("excerpt")
+        if source == "structural" or (excerpt and excerpt.strip()):
+            valid_red_flags.append(flag)
+        else:
+            logger.warning(f"Removing red flag '{flag.get('flag_id', 'unknown')}' — empty excerpt")
     report["red_flags"] = valid_red_flags
 
-    # 2. Filter out insight cards with empty excerpts
-    # Per prompt line 270: "if you cannot cite a specific page, do not create the card"
-    # and line 382: excerpt is required
-    insight_cards = report.get("insight_cards", [])
-    valid_insight_cards = []
-    for card in insight_cards:
-        if isinstance(card, dict):
-            excerpt = card.get("excerpt", "")
-            # Keep card if it has a non-empty excerpt
-            if excerpt and excerpt.strip():
-                valid_insight_cards.append(card)
-            else:
-                logger.warning(
-                    f"Removing insight card '{card.get('question', 'unknown')[:50]}' "
-                    f"due to empty excerpt"
-                )
-    report["insight_cards"] = valid_insight_cards
+    # ── Insight cards — PRESERVE, do NOT pop ──────────────────────────────
+    # insight_cards are generated by the Auditor (Step 6) and must be kept
+    # intact so DeepDiveQuestions can render the Policy Q&A tab.
+    # They are intentionally NOT shown in FullReport — that separation is
+    # handled on the frontend, not here.
+    raw_cards = report.get("insight_cards", [])
+    report["insight_cards"] = _validate_insight_cards(raw_cards)
 
-    # 3. Recalculate total_deductions from remaining flags
-    total_deductions = sum(
-        flag.get("deduction", 0) for flag in valid_red_flags
-    )
-    # Cap at 40, floor at 0 (per prompt line 212)
-    total_deductions = max(0, min(40, total_deductions))
+    # ── Scores & grades ────────────────────────────────────────────────────
+    total_deductions = max(0, min(40, sum(f.get("deduction", 0) for f in valid_red_flags)))
     report["total_deductions"] = total_deductions
 
-    # 4. Calculate base_score from dimension scores
-    clarity = report.get("clarity", {})
-    coverage = report.get("coverage", {})
-    claim_efficiency = report.get("claim_efficiency", {})
-    
-    clarity_score = clarity.get("score", 0)
-    coverage_score = coverage.get("score", 0)
-    claims_score = claim_efficiency.get("score", 0)
-    
-    base_score = clarity_score + coverage_score + claims_score
-
-    # 5. Recalculate enziu_index: base_score - total_deductions (floor 0)
-    enziu_index = max(0, base_score - total_deductions)
+    clarity_score  = report.get("clarity", {}).get("score", 0)
+    coverage_score = report.get("coverage", {}).get("score", 0)
+    claims_score   = report.get("claim_efficiency", {}).get("score", 0)
+    base_score     = clarity_score + coverage_score + claims_score
+    enziu_index    = max(0, base_score - total_deductions)
     report["enziu_index"] = enziu_index
 
-    # 6. Recalculate grade to match the index
     overall_grade = _index_to_grade(enziu_index)
-    
-    # Update grade object
     grade = report.get("grade", {})
-    grade["overall"] = overall_grade
-    
-    # Also validate per-dimension grades
-    clarity_pct = (clarity_score / 30) * 100 if clarity_score > 0 else 0
-    coverage_pct = (coverage_score / 40) * 100 if coverage_score > 0 else 0
-    claims_pct = (claims_score / 30) * 100 if claims_score > 0 else 0
-    
-    grade["clarity"] = _index_to_grade(int(clarity_pct))
-    grade["coverage"] = _index_to_grade(int(coverage_pct))
-    grade["claimsEfficiency"] = _index_to_grade(int(claims_pct))
-    
+    grade["overall"]          = overall_grade
+    grade["clarity"]          = _index_to_grade(int((clarity_score  / 30) * 100) if clarity_score  > 0 else 0)
+    grade["coverage"]         = _index_to_grade(int((coverage_score / 40) * 100) if coverage_score > 0 else 0)
+    grade["claimsEfficiency"] = _index_to_grade(int((claims_score   / 30) * 100) if claims_score   > 0 else 0)
     report["grade"] = grade
-
-    # 7. Update score_preview based on overall grade
     report["score_preview"] = _grade_to_score_preview(overall_grade)
 
     logger.info(
-        f"Report validation complete — "
-        f"enziu_index={enziu_index}, grade={overall_grade}, "
+        f"Report validation complete — enziu_index={enziu_index}, grade={overall_grade}, "
         f"base_score={base_score}, deductions={total_deductions}, "
-        f"red_flags={len(valid_red_flags)}, insight_cards={len(valid_insight_cards)}"
+        f"red_flags={len(valid_red_flags)}, insight_cards={len(report['insight_cards'])}"
     )
-
     return report
 
 
 # ---------------------------------------------------------------------------
-# Grade helpers (mirrors front-end gradeToPercentage)
+# Grade helpers
 # ---------------------------------------------------------------------------
 
-# All grades the Auditor can produce (Step 5 band table)
 _GRADE_BANDS = ("A+", "A", "B+", "B", "C+", "C", "D", "F")
 
 _GRADE_SCORE_MAP: dict[str, int] = {
@@ -273,29 +260,19 @@ _GRADE_SCORE_MAP: dict[str, int] = {
 
 
 def _index_to_grade(index: int) -> str:
-    """Convert a numeric ENZIU index to its letter grade band."""
-    if index >= 90:
-        return "A+"
-    if index >= 80:
-        return "A"
-    if index >= 75:
-        return "B+"
-    if index >= 70:
-        return "B"
-    if index >= 65:
-        return "C+"
-    if index >= 60:
-        return "C"
-    if index >= 50:
-        return "D"
+    if index >= 90: return "A+"
+    if index >= 80: return "A"
+    if index >= 75: return "B+"
+    if index >= 70: return "B"
+    if index >= 65: return "C+"
+    if index >= 60: return "C"
+    if index >= 50: return "D"
     return "F"
 
 
 def _grade_to_score_preview(grade: str) -> str:
-    if grade in ("A+", "A"):
-        return "high"
-    if grade in ("B+", "B", "C+"):
-        return "medium"
+    if grade in ("A+", "A"):        return "high"
+    if grade in ("B+", "B", "C+"): return "medium"
     return "low"
 
 
@@ -304,10 +281,6 @@ def _grade_to_score_preview(grade: str) -> str:
 # ---------------------------------------------------------------------------
 
 def _safe_parse_json(raw: str, log_prefix: str = "") -> Dict[str, Any]:
-    """
-    Robust JSON extraction from LLM output.
-    Handles markdown fences, trailing commas, truncation, and extra text.
-    """
     if not raw or not raw.strip():
         raise ValueError("Empty response from LLM")
 
@@ -316,30 +289,21 @@ def _safe_parse_json(raw: str, log_prefix: str = "") -> Dict[str, Any]:
     cleaned = cleaned.removesuffix("```").strip()
 
     start = cleaned.find("{")
-    end = cleaned.rfind("}")
+    end   = cleaned.rfind("}")
     if start == -1 or end == -1 or end < start:
         if log_prefix:
             logger.warning(f"{log_prefix} no JSON found; raw (2000 chars): {raw[:2000]}")
         raise ValueError("No JSON object found in response")
 
     cleaned = cleaned[start:end + 1]
-
-    # Fix single-quoted keys
     cleaned = re.sub(r"'([^'\"\s]+)'\s*:", r'"\1":', cleaned)
-    # Remove trailing commas before } or ]
     cleaned = re.sub(r",\s*([}\]])", r"\1", cleaned)
 
-    # Fix unterminated strings (truncated output)
     in_string = escaped = False
     for ch in cleaned:
-        if escaped:
-            escaped = False
-            continue
-        if ch == "\\":
-            escaped = True
-            continue
-        if ch == '"':
-            in_string = not in_string
+        if escaped:    escaped = False; continue
+        if ch == "\\": escaped = True;  continue
+        if ch == '"':  in_string = not in_string
     if in_string:
         cleaned += '"'
         cleaned += "}" * max(0, cleaned.count("{") - cleaned.count("}"))
@@ -352,21 +316,15 @@ def _safe_parse_json(raw: str, log_prefix: str = "") -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Fallback facts — always uses real Python booleans
+# Fallbacks
 # ---------------------------------------------------------------------------
 
 def _fallback_facts() -> Dict[str, Any]:
     return {
-        "policy_type": "other",
-        "carrier_name": None,
-        "word_count": 0,
-        "page_count": 0,
-        "definitions_section": "NO",
-        "capitalized_terms": [],
-        "defined_terms": [],
-        "exclusions": [],
-        "table_of_contents": "NO",
-        "section_numbering": "NO",
+        "policy_type": "other", "carrier_name": None,
+        "word_count": 0, "page_count": 0,
+        "definitions_section": "NO", "capitalized_terms": [], "defined_terms": [],
+        "exclusions": [], "table_of_contents": "NO", "section_numbering": "NO",
         "page_cross_references": "NO",
         "waiting_period": {"found": False, "page": None, "quote": None, "days": None},
         "sub_limits": {"location": "ABSENT", "items": []},
@@ -375,55 +333,49 @@ def _fallback_facts() -> Dict[str, Any]:
         "regulator_reference": {"present": False, "quote": None, "page": None},
         "risk_findings": [],
         "financial_terms": {
-            "annual_premium": None,
-            "deductible": None,
-            "policy_effective_date": None,
-            "carrier_name": None,
+            "annual_premium": None, "deductible": None,
+            "policy_effective_date": None, "carrier_name": None,
         },
     }
 
 
 def _error_report(message: str) -> Dict[str, Any]:
-    """Minimal valid report structure for error cases."""
     return {
         "enziu_index": 0,
-        "grade": {
-            "overall": "C",
-            "clarity": "C",
-            "coverage": "C",
-            "claimsEfficiency": "C"
-        },
+        "grade": {"overall": "C", "clarity": "C", "coverage": "C", "claimsEfficiency": "C"},
         "score_preview": "medium",
-        "clarity": {"score": 0, "grade": "C", "sub_scores": {}, "estimated_grade_level": 12, "reasoning": message},
-        "coverage": {"score": 0, "grade": "C", "sub_scores": {}, "exclusion_count": 0, "reasoning": message},
+        "clarity":          {"score": 0, "grade": "C", "sub_scores": {}, "estimated_grade_level": 12, "reasoning": message},
+        "coverage":         {"score": 0, "grade": "C", "sub_scores": {}, "exclusion_count": 0,        "reasoning": message},
         "claim_efficiency": {"score": 0, "grade": "C", "sub_scores": {}, "appeal_rights_present": False, "payout_days_stated": None, "reasoning": message},
-        "red_flags": [],
-        "exclusions": [],
-        "clauses": [],
+        "red_flags":    [],
+        "exclusions":   [],
+        "clauses":      [],
         "insight_cards": [],
         "total_deductions": 0,
         "plain_english_summary": "Document could not be processed.",
-        "comparison_ready": {"policy_type": "unknown", "carrier_name": None, "policy_effective_date": None, "annual_premium_stated": None, "deductible_stated": None},
+        "comparison_ready": {
+            "policy_type": "unknown", "carrier_name": None,
+            "policy_effective_date": None, "annual_premium_stated": None,
+            "deductible_stated": None,
+        },
         "error": message,
     }
 
 
 def _transform_report_for_frontend(report: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Transform Auditor output to match frontend expectations.
-    Maps backend field names to frontend-expected names.
+    Remap Auditor field names to the camelCase keys the frontend expects.
+    insight_cards passes through unchanged — customer-mode.tsx reads it
+    directly off the fact sheet under that exact key.
     """
-    # Create a copy to avoid mutating the cached report
     transformed = report.copy()
-    
-    # Map red_flags → detailedFlags
+    # red_flags → detailedFlags (FullReport reads detailedFlags)
     if "red_flags" in transformed:
         transformed["detailedFlags"] = transformed["red_flags"]
-    
-    # Map plain_english_summary → summary
+    # plain_english_summary → summary (SneakPeekBento reads summary)
     if "plain_english_summary" in transformed:
         transformed["summary"] = transformed["plain_english_summary"]
-    
+    # insight_cards remains as-is — convertFactSheetToResult reads it by name
     return transformed
 
 
@@ -439,26 +391,27 @@ class InferenceClient:
     Phase 2 — Auditor:   Llama 3.3 70B (131K context)
 
     Single-pass architecture: Both phases run during sneak peek.
-    Full report is cached and reused to prevent drift.
+    Full report (including insight_cards) cached in-memory per session;
+    no server-side persistence.
     """
 
     def __init__(self) -> None:
-        self.api_key = settings.inference_api_key
-        self.api_base = settings.inference_api_base
+        self.api_key         = settings.inference_api_key
+        self.api_base        = settings.inference_api_base
         self.extractor_model = settings.inference_model
-        self.auditor_model = settings.auditor_model
+        self.auditor_model   = settings.auditor_model
         self.headers: dict[str, str] = {
             "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
+            "Content-Type":  "application/json",
         }
         self._session_cache: dict[str, Dict[str, Any]] = {}
-        self._report_cache: dict[str, Dict[str, Any]] = {}
+        self._report_cache:  dict[str, Dict[str, Any]] = {}
         logger.info(
             f"InferenceClient initialized — "
             f"extractor={self.extractor_model}, auditor={self.auditor_model}"
         )
 
-    # ── Core HTTP ────────────────────────────────────────────────────────
+    # ── Core HTTP ────────────────────────────────────────────────────────────
 
     async def _complete(
         self,
@@ -475,10 +428,10 @@ class InferenceClient:
             "model": model_name,
             "messages": [
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": prompt},
+                {"role": "user",   "content": prompt},
             ],
             "temperature": temperature,
-            "max_tokens": max_tokens,
+            "max_tokens":  max_tokens,
         }
 
         last_error: Exception = Exception("Failed to get response from Inference API")
@@ -535,13 +488,9 @@ class InferenceClient:
 
         raise last_error
 
-    # ── Phase 1: Fact Extraction ─────────────────────────────────────────
+    # ── Phase 1: Fact Extraction ─────────────────────────────────────────────
 
     async def extract_facts(self, text: str, session_id: str) -> Dict[str, Any]:
-        """
-        Phase 1 — Run ENZIU Extractor on raw policy text.
-        Caches normalized facts JSON in-memory for the session lifetime.
-        """
         start_time = time.time()
         logger.info(f"extract_facts() — session={session_id}, chars={len(text)}")
 
@@ -555,6 +504,11 @@ class InferenceClient:
                 f"{ENZIU_EXTRACTOR_PROMPT}\n\n"
                 f"<document>\n{safe_text}\n</document>\n\nExtraction:"
             )
+            logger.info(
+                f"Extractor prompt prepared — total length: {len(prompt)} chars, "
+                f"document text: {len(safe_text)} chars"
+            )
+            logger.debug(f"Extractor prompt (full content): {prompt}")
 
             raw = await self._complete(
                 prompt=prompt,
@@ -575,26 +529,20 @@ class InferenceClient:
                 facts = json.loads(facts)
             if not isinstance(facts, dict):
                 raise ValueError(
-                    f"Expected JSON object from Extractor, got {type(facts).__name__}. "
-                    f"Raw (first 500 chars): {str(facts)[:500]}"
+                    f"Expected JSON object from Extractor, got {type(facts).__name__}."
                 )
 
-            # Defensive normalization — fixes any string booleans the LLM emitted
             facts = _normalize_facts_booleans(facts)
 
             elapsed = time.time() - start_time
             logger.info(
                 f"Fact extraction complete — session={session_id}, "
-                f"policy_type={facts.get('policy_type', '?')}, "
-                f"time={elapsed:.2f}s"
+                f"policy_type={facts.get('policy_type', '?')}, time={elapsed:.2f}s"
             )
-
-            # DEBUG: Print full Extractor JSON response for debugging
-            print(f"\n{'='*80}")
-            print(f"=== EXTRACTOR JSON RESPONSE (session={session_id}) ===")
-            print(json.dumps(facts, indent=2, ensure_ascii=False)[:10000])  # Limit to 10K chars
-            print(f"=== END EXTRACTOR JSON ===")
-            print(f"{'='*80}\n")
+            logger.debug(
+                f"Extractor JSON response (session={session_id}):\n"
+                f"{json.dumps(facts, indent=2, ensure_ascii=False)}"
+            )
 
             self._session_cache[session_id] = facts
             return facts
@@ -602,111 +550,81 @@ class InferenceClient:
         except Exception as e:
             elapsed = time.time() - start_time
             logger.error(
-                f"Fact extraction failed after {elapsed:.2f}s: "
-                f"{type(e).__name__}: {e}",
+                f"Fact extraction failed after {elapsed:.2f}s: {type(e).__name__}: {e}",
                 exc_info=True,
             )
             return _fallback_facts()
 
-    # ── Sneak Peek (Single-Pass: Extraction + Audit) ─────────────────────
+    # ── Sneak Peek ───────────────────────────────────────────────────────────
 
     async def analyze_sneak_peek(self, text: str, session_id: str) -> Dict[str, Any]:
-        """
-        Sneak Peek — runs Phase 1 extraction AND Phase 2 audit, caches the full report,
-        and returns a lightweight preview PLUS the full report for client-side caching.
-        This ensures consistency (no drift) between sneak peek and full report since
-        both use the same audit result. The full report is returned so the client can
-        cache it encrypted — eliminating delay after payment.
-        """
         logger.info(f"analyze_sneak_peek() — session={session_id}")
 
         try:
-            # Run full audit (extraction + scoring) and cache the result
             full_report = await self.process_document(text, session_id)
 
-            # Check if audit returned an error
             if "error" in full_report:
-                # Extract facts for basic info
-                facts = await self.extract_facts(text, session_id)
-                policy_type = facts.get("policy_type", "other")
+                facts        = await self.extract_facts(text, session_id)
+                policy_type  = facts.get("policy_type", "other")
                 carrier_name = facts.get("carrier_name") or (
                     facts.get("financial_terms") or {}
                 ).get("carrier_name")
                 return {
-                    "grade": {"overall": "C", "clarity": "C", "coverage": "C", "claimsEfficiency": "C"},
-                    "topRisk": full_report.get("error", "Document error"),
-                    "redFlags": ["Analysis unavailable"],
-                    "summary": "Unable to analyze this document.",
+                    "grade":        {"overall": "C", "clarity": "C", "coverage": "C", "claimsEfficiency": "C"},
+                    "topRisk":      full_report.get("error", "Document error"),
+                    "redFlags":     ["Analysis unavailable"],
+                    "summary":      "Unable to analyze this document.",
                     "score_preview": "medium",
-                    "policy_type": policy_type,
+                    "policy_type":  policy_type,
                     "carrier_name": carrier_name,
-                    "full_report": full_report,  # Return error report for consistency
+                    "full_report":  full_report,
                 }
 
-            # Extract sneak peek data from the full cached report
-            grade = full_report.get("grade", {})
-            overall_grade = grade.get("overall", "C")
+            grade         = full_report.get("grade", {})
             score_preview = full_report.get("score_preview", "medium")
+            red_flags     = full_report.get("red_flags", [])
 
-            # Get top risk from red flags
-            red_flags = full_report.get("red_flags", [])
             if red_flags:
-                top_risk = red_flags[0].get("plain_english", "Red flag detected")
-                red_flag_names = [
-                    flag.get("plain_english", flag.get("flag_id", ""))
-                    for flag in red_flags[:3]
-                ]
+                top_risk       = red_flags[0].get("plain_english", "Red flag detected")
+                red_flag_names = [f.get("plain_english", f.get("flag_id", "")) for f in red_flags[:3]]
             else:
                 exclusion_count = full_report.get("coverage", {}).get("exclusion_count", 0)
-                top_risk = (
+                top_risk        = (
                     f"{exclusion_count} material exclusion(s)"
                     if exclusion_count > 0
                     else "No major red flags detected"
                 )
                 red_flag_names = []
 
-            policy_type = full_report.get("comparison_ready", {}).get("policy_type", "other")
-            carrier_name = full_report.get("comparison_ready", {}).get("carrier_name")
-
-            # Return preview + full report for client-side encrypted caching
             return {
-                "grade": grade,
-                "topRisk": top_risk,
-                "redFlags": red_flag_names,
-                "summary": full_report.get("plain_english_summary", "Preview from extracted facts."),
+                "grade":        grade,
+                "topRisk":      top_risk,
+                "redFlags":     red_flag_names,
+                "summary":      full_report.get("plain_english_summary", ""),
                 "score_preview": score_preview,
-                "policy_type": policy_type,
-                "carrier_name": carrier_name,
-                "full_report": full_report,  # Full report for instant access after payment
+                "policy_type":  full_report.get("comparison_ready", {}).get("policy_type", "other"),
+                "carrier_name": full_report.get("comparison_ready", {}).get("carrier_name"),
+                "full_report":  full_report,
             }
 
         except Exception as e:
             logger.error(f"Sneak peek error: {e}", exc_info=True)
             return {
-                "grade": {"overall": "C", "clarity": "C", "coverage": "C", "claimsEfficiency": "C"},
-                "topRisk": "Unable to analyze at this time",
-                "redFlags": ["Analysis in progress"],
-                "summary": "Full analysis available after payment.",
+                "grade":        {"overall": "C", "clarity": "C", "coverage": "C", "claimsEfficiency": "C"},
+                "topRisk":      "Unable to analyze at this time",
+                "redFlags":     ["Analysis in progress"],
+                "summary":      "Full analysis available after payment.",
                 "score_preview": "medium",
-                "policy_type": "other",
+                "policy_type":  "other",
                 "carrier_name": None,
             }
 
-    # ── Phase 2: Full Policy Audit ────────────────────────────────────────
+    # ── Phase 2: Full Audit ───────────────────────────────────────────────────
 
     async def process_document(self, text: str, session_id: str) -> Dict[str, Any]:
-        """
-        Phase 2 — Run ENZIU Auditor on cached facts.
-        Ensures facts are extracted first (reads from cache if available).
-        Returns full ENZIU report JSON per the auditor schema.
-        
-        Single-pass architecture: If the report is already cached from
-        analyze_sneak_peek(), returns the cached result to prevent drift.
-        """
         start_time = time.time()
         logger.info(f"process_document() — session={session_id}")
 
-        # Check if we already have a cached full report (from sneak peek)
         if session_id in self._report_cache:
             logger.info(f"Returning cached full report for session={session_id}")
             return self._report_cache[session_id].copy()
@@ -715,14 +633,18 @@ class InferenceClient:
             facts = await self.extract_facts(text, session_id)
 
             if "error" in facts:
-                error_msg = facts["error"]
-                logger.warning(f"Facts contain error: {error_msg}")
-                error_report = _error_report(str(error_msg))
+                error_report = _error_report(str(facts["error"]))
                 self._report_cache[session_id] = error_report
                 return error_report
 
             facts_json = json.dumps({"facts": facts}, ensure_ascii=False)
-            prompt = f"{ENZIU_AUDITOR_PROMPT}\n\n{facts_json}\n\nAudit:"
+            prompt     = f"{ENZIU_AUDITOR_PROMPT}\n\n{facts_json}\n\nAudit:"
+
+            logger.info(
+                f"Auditor prompt prepared — total length: {len(prompt)} chars, "
+                f"facts JSON: {len(facts_json)} chars"
+            )
+            logger.debug(f"Auditor prompt (full content): {prompt}")
 
             raw = await self._complete(
                 prompt=prompt,
@@ -731,9 +653,10 @@ class InferenceClient:
                     "All boolean fields must be JSON literals true or false. "
                     "The deduction field on each red flag is a positive integer. "
                     "total_deductions is a positive integer. "
+                    "insight_cards is a required array — include all 8 cards. "
                     "No preamble. No markdown."
                 ),
-                max_tokens=16000,  # Increased to prevent summary truncation
+                max_tokens=8000,
                 timeout=420.0,
                 max_retries=2,
                 temperature=0.0,
@@ -745,31 +668,23 @@ class InferenceClient:
                 report = json.loads(report)
             if not isinstance(report, dict):
                 raise ValueError(
-                    f"Expected JSON object from Auditor, got {type(report).__name__}. "
-                    f"Raw (first 500 chars): {str(report)[:500]}"
+                    f"Expected JSON object from Auditor, got {type(report).__name__}."
                 )
 
-            # Defensive normalization of report output
             report = _normalize_report_booleans(report)
-
-            # Validate and fix report for consistency (excerpts, index calculation, grades)
             report = _validate_and_fix_report(report)
 
-            # DEBUG: Print full Auditor JSON response for debugging
-            print(f"\n{'='*80}")
-            print(f"=== AUDITOR JSON RESPONSE (session={session_id}) ===")
-            print(json.dumps(report, indent=2, ensure_ascii=False)[:15000])  # Limit to 15K chars
-            print(f"=== END AUDITOR JSON ===")
-            print(f"{'='*80}\n")
+            logger.debug(
+                f"Auditor JSON response (session={session_id}):\n"
+                f"{json.dumps(report, indent=2, ensure_ascii=False)}"
+            )
 
-            # Cache the full report for reuse (prevents drift)
             self._report_cache[session_id] = report
 
             elapsed = time.time() - start_time
             logger.info(
                 f"Full audit complete — session={session_id}, "
-                f"grade={report.get('grade', {}).get('overall', '?')}, "
-                f"time={elapsed:.2f}s"
+                f"grade={report.get('grade', {}).get('overall', '?')}, time={elapsed:.2f}s"
             )
             return report
 
@@ -783,34 +698,18 @@ class InferenceClient:
             self._report_cache[session_id] = error_report
             return error_report
 
-    # ── Get Transformed Report for Frontend ───────────────────────────────
+    # ── Frontend transform ────────────────────────────────────────────────────
 
     async def get_frontend_report(self, text: str, session_id: str) -> Dict[str, Any]:
-        """
-        Get the full audit report transformed for frontend consumption.
-        Runs the audit if not already cached, then applies field aliasing.
-        """
-        # Get or compute the full report
         report = await self.process_document(text, session_id)
-        
-        # Transform for frontend compatibility
         return _transform_report_for_frontend(report)
 
-    # ── Session management ───────────────────────────────────────────────
+    # ── Session management ────────────────────────────────────────────────────
 
     def clear_session(self, session_id: str) -> None:
         self._session_cache.pop(session_id, None)
         self._report_cache.pop(session_id, None)
         logger.info(f"Session cache cleared: {session_id}")
-
-    async def store_session(self, session_id: str, data: dict[str, Any]) -> None:
-        pass  # TODO: Upstash Redis
-
-    async def mark_session_paid(self, session_id: str) -> None:
-        logger.info(f"Session marked as paid: {session_id}")
-
-    async def check_session_payment(self, session_id: str) -> bool:
-        return False  # TODO: Upstash Redis
 
     async def end_session(self, session_id: str) -> None:
         self.clear_session(session_id)

@@ -35,6 +35,17 @@ from ..config import settings
 logger = logging.getLogger("pdf_extractor")
 logger.setLevel(logging.DEBUG if settings.debug else logging.INFO)
 
+# Add console handler if not already present
+if not logger.handlers:
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.DEBUG)
+    formatter = logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
+
 # ── Printed page number stripping ────────────────────────────────────────
 # Insurance policy PDFs often have a printed page number (e.g., "8") that
 # differs from the physical PDF page index.  This regex strips standalone
@@ -156,6 +167,11 @@ class PDFExtractor:
             
             elapsed = time.time() - start_time
             logger.info(f"PDF text extraction completed - {pages_to_extract} pages, {total_chars} total chars, {elapsed:.3f}s")
+            
+            # Log extracted text for debugging (full content at DEBUG level)
+            if text_parts:
+                preview_text = "\n\n".join(text_parts)
+                logger.debug(f"Extracted text (full content): {preview_text}")
             
             return "\n\n".join(text_parts)
         

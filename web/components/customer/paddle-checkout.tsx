@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatCurrency } from "@/lib/utils";
 import { CreditCard, Apple, Smartphone, RefreshCw } from "lucide-react";
-import { storeRecoveryVault, getFactSheet, getText } from "@/lib/pdf-storage";
+import { storeRecoveryVault, getFactSheet, getEncryptedText } from "@/lib/pdf-storage";
 
 interface PaddleCheckoutProps {
   amount: number;
@@ -295,7 +295,7 @@ export function PaddleCheckout({
       if (result.voucher_code) {
         try {
           const factSheet = await getFactSheet(sessionId);
-          const extractedText = await getText(sessionId);
+          const extractedText = await getEncryptedText(sessionId);
           if (factSheet && extractedText) {
             await storeRecoveryVault(result.voucher_code, {
               factSheet,
