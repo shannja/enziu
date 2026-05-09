@@ -2,17 +2,24 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { Moon, Sun } from "lucide-react";
+import { Moon, Sun, Lock } from "lucide-react";
 import { useTheme } from "@/context/ThemeContext";
 import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
 
-type Mode = "customer" | "broker";
+type Mode = "customer";
+
+interface ModeOption {
+  value: Mode | "broker";
+  label: string;
+  disabled?: boolean;
+  tooltip?: string;
+}
 
 interface HeaderProps {
   mode: Mode;
   onModeChange: (mode: Mode) => void;
-  hideToggle?: boolean; // Hide the customer/broker toggle
+  hideToggle?: boolean; // Hide the mode toggle
 }
 
 export function Header({ mode, onModeChange, hideToggle = false }: HeaderProps) {
@@ -22,9 +29,9 @@ export function Header({ mode, onModeChange, hideToggle = false }: HeaderProps) 
     setTheme(actualTheme === "dark" ? "light" : "dark");
   };
 
-  const modes: Array<{ value: Mode; label: string }> = [
+  const modes: ModeOption[] = [
     { value: "customer", label: "Customer" },
-    // TODO: Put it back{ value: "broker", label: "Broker" },
+    { value: "broker", label: "Broker", disabled: true, tooltip: "Coming Soon" },
   ];
 
   return (
@@ -70,20 +77,40 @@ export function Header({ mode, onModeChange, hideToggle = false }: HeaderProps) 
             transition={{ duration: 0.4, delay: 0.15, ease: "easeOut" }}
             className="flex items-center gap-1 bg-secondary rounded-full p-1 border border-border/50 md:justify-self-center"
           >
-            {modes.map((m) => (
-              <button
-                key={m.value}
-                onClick={() => onModeChange(m.value)}
-                className={cn(
-                  "px-6 py-1.5 md:px-5 md:py-2 text-xs md:text-sm font-medium rounded-full transition-all duration-200",
-                  mode === m.value
-                    ? "bg-gradient-to-r from-[#ffde59] to-[#ff914d] text-black shadow-sm"
-                    : "text-muted-foreground hover:text-foreground"
-                )}
-              >
-                {m.label}
-              </button>
-            ))}
+            {modes.map((m) => {
+              const isActive = mode === m.value;
+              const isDisabled = m.disabled === true;
+              
+              return (
+                <div
+                  key={m.value}
+                  className="relative group"
+                  title={isDisabled ? m.tooltip : undefined}
+                >
+                  <button
+                    onClick={() => !isDisabled && onModeChange(m.value as Mode)}
+                    className={cn(
+                      "px-6 py-1.5 md:px-5 md:py-2 text-xs md:text-sm font-medium rounded-full transition-all duration-200 flex items-center gap-1.5",
+                      isActive && !isDisabled
+                        ? "bg-gradient-to-r from-[#ffde59] to-[#ff914d] text-black shadow-sm"
+                        : isDisabled
+                          ? "text-muted-foreground/50 cursor-not-allowed opacity-60"
+                          : "text-muted-foreground hover:text-foreground"
+                    )}
+                    disabled={isDisabled}
+                  >
+                    {m.label}
+                    {isDisabled && <Lock className="w-3 h-3" />}
+                  </button>
+                  {isDisabled && (
+                    <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-1.5 bg-popover text-popover-foreground text-xs rounded-md shadow-lg opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none whitespace-nowrap">
+                      {m.tooltip}
+                      <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-popover"></div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </motion.nav>
         )}
 

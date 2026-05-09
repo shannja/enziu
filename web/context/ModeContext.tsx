@@ -2,7 +2,7 @@
 
 import React, { createContext, useContext, useState, useCallback, type ReactNode } from "react";
 
-type Mode = "customer" | "broker";
+type Mode = "customer";
 
 interface ModeContextType {
   mode: Mode;

@@ -10,6 +10,10 @@
  *   const blob = await getPDF(sessionId);
  *   const text = await getText(sessionId);
  *   await deleteSession(sessionId);
+ * 
+ * Recovery Vault (encrypted report storage):
+ *   await storeRecoveryVault(voucherCode, { factSheet, extractedText, sessionId });
+ *   const data = await getRecoveryVault(voucherCode);
  */
 
 const DB_NAME = 'enziu-vault';
@@ -57,6 +61,328 @@ function openDB(): Promise<IDBDatabase> {
     };
   });
 }
+
+// ── Crypto helpers ──────────────────────────────────────────────────────────
+
+/**
+ * SHA-256 hash of a string (for IndexedDB key derivation)
+ */
+async function sha256(message: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(message);
+  const hash = await crypto.subtle.digest('SHA-256', data);
+  return Array.from(new Uint8Array(hash))
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+/**
+ * Derive an AES-GCM key from a voucher code using PBKDF2
+ */
+async function deriveKey(voucherCode: string, salt: Uint8Array): Promise<CryptoKey> {
+  const encoder = new TextEncoder();
+  const keyMaterial = await crypto.subtle.importKey(
+    'raw',
+    encoder.encode(voucherCode),
+    'PBKDF2',
+    false,
+    ['deriveKey']
+  );
+  
+  return crypto.subtle.deriveKey(
+    {
+      name: 'PBKDF2',
+      salt: salt.buffer as ArrayBuffer,
+      iterations: 100000,
+      hash: 'SHA-256',
+    },
+    keyMaterial,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['encrypt', 'decrypt']
+  );
+}
+
+/**
+ * Derive an AES-GCM key from a session ID for temporary encrypted caching.
+ * Uses PBKDF2 with a random salt for each encryption operation.
+ */
+async function deriveSessionKey(sessionId: string, salt: Uint8Array): Promise<CryptoKey> {
+  const encoder = new TextEncoder();
+  // Combine sessionId with a fixed domain separator to prevent key collision
+  const keyMaterial = await crypto.subtle.importKey(
+    'raw',
+    encoder.encode(`session:${sessionId}`),
+    'PBKDF2',
+    false,
+    ['deriveKey']
+  );
+  
+  return crypto.subtle.deriveKey(
+    {
+      name: 'PBKDF2',
+      salt: salt.buffer as ArrayBuffer,
+      iterations: 100000,
+      hash: 'SHA-256',
+    },
+    keyMaterial,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['encrypt', 'decrypt']
+  );
+}
+
+interface EncryptedPayload {
+  salt: number[];
+  iv: number[];
+  ciphertext: number[];
+  createdAt: number;
+}
+
+/**
+ * Store an encrypted fact sheet in IndexedDB using session-based encryption.
+ * The data is encrypted with AES-256-GCM using a key derived from the session ID.
+ * This provides secure temporary storage that appears as random bytes in browser inspector.
+ * 
+ * @param sessionId - Unique session identifier (used as encryption key basis)
+ * @param factSheet - The full audit report to encrypt and store
+ */
+export async function storeEncryptedFactSheet(sessionId: string, factSheet: any): Promise<void> {
+  const db = await openDB();
+  
+  // Generate random salt and IV for this encryption operation
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  
+  // Derive encryption key from session ID
+  const key = await deriveSessionKey(sessionId, salt);
+  
+  // Encrypt the payload
+  const encoder = new TextEncoder();
+  const plaintext = encoder.encode(JSON.stringify(factSheet));
+  const ciphertext = await crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv: iv.buffer as ArrayBuffer },
+    key,
+    plaintext
+  );
+  
+  // Prepare encrypted payload
+  const encryptedPayload: EncryptedPayload = {
+    salt: Array.from(salt),
+    iv: Array.from(iv),
+    ciphertext: Array.from(new Uint8Array(ciphertext)),
+    createdAt: Date.now(),
+  };
+  
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction([STORE_NAME], 'readwrite');
+    const store = transaction.objectStore(STORE_NAME);
+    
+    // First check if a record already exists
+    const getRequest = store.get(sessionId);
+    
+    getRequest.onsuccess = () => {
+      const existing = getRequest.result as VaultRecord | undefined;
+      const record: VaultRecord = existing || { sessionId, createdAt: Date.now() };
+      record.factSheet = encryptedPayload;  // Store as encrypted blob
+      record.createdAt = Date.now();
+      
+      const putRequest = store.put(record);
+      putRequest.onsuccess = () => resolve();
+      putRequest.onerror = () => reject(putRequest.error);
+    };
+    
+    getRequest.onerror = () => reject(getRequest.error);
+    
+    transaction.oncomplete = () => db.close();
+  });
+}
+
+/**
+ * Retrieve and decrypt a fact sheet from IndexedDB.
+ * Returns null if no encrypted fact sheet found or decryption fails.
+ * 
+ * @param sessionId - Unique session identifier (used to derive decryption key)
+ * @returns The decrypted fact sheet or null
+ */
+export async function getEncryptedFactSheet(sessionId: string): Promise<any | null> {
+  const db = await openDB();
+  
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction([STORE_NAME], 'readonly');
+    const store = transaction.objectStore(STORE_NAME);
+    
+    const request = store.get(sessionId);
+    
+    request.onsuccess = async () => {
+      const result = request.result as VaultRecord | undefined;
+      if (!result || !result.factSheet) {
+        resolve(null);
+        return;
+      }
+      
+      // Check if factSheet is an encrypted payload (has salt, iv, ciphertext)
+      const maybeEncrypted = result.factSheet;
+      if (!maybeEncrypted.salt || !maybeEncrypted.iv || !maybeEncrypted.ciphertext) {
+        // Not encrypted, return as-is (fallback for unencrypted storage)
+        resolve(maybeEncrypted);
+        return;
+      }
+      
+      try {
+        const encrypted = maybeEncrypted as EncryptedPayload;
+        const salt = new Uint8Array(encrypted.salt);
+        const iv = new Uint8Array(encrypted.iv);
+        const ciphertext = new Uint8Array(encrypted.ciphertext);
+        
+        // Derive decryption key from session ID
+        const key = await deriveSessionKey(sessionId, salt);
+        
+        // Decrypt the payload
+        const plaintext = await crypto.subtle.decrypt(
+          { name: 'AES-GCM', iv: iv.buffer as ArrayBuffer },
+          key,
+          ciphertext
+        );
+        
+        const decoder = new TextDecoder();
+        const data = JSON.parse(decoder.decode(plaintext));
+        resolve(data);
+      } catch (error) {
+        // Decryption failed — corrupted data or wrong session
+        console.error('[getEncryptedFactSheet] Decryption failed:', error);
+        resolve(null);
+      }
+    };
+    
+    request.onerror = () => reject(request.error);
+    transaction.oncomplete = () => db.close();
+  });
+}
+
+interface RecoveryVaultData {
+  factSheet: any;
+  extractedText: string;
+  sessionId: string;
+  pdfData?: string;
+}
+
+/**
+ * Store an encrypted recovery vault in IndexedDB.
+ * The key is SHA256(voucherCode) — meaningless without the code.
+ * The value is AES-GCM encrypted with key derived via PBKDF2(voucherCode, salt).
+ */
+export async function storeRecoveryVault(
+  voucherCode: string,
+  data: RecoveryVaultData
+): Promise<void> {
+  const db = await openDB();
+  const vaultKey = await sha256(voucherCode);
+  
+  // Generate random salt and IV
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  
+  // Derive encryption key
+  const key = await deriveKey(voucherCode, salt);
+  
+  // Encrypt the payload
+  const encoder = new TextEncoder();
+  const plaintext = encoder.encode(JSON.stringify(data));
+  const ciphertext = await crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv: iv.buffer as ArrayBuffer },
+    key,
+    plaintext
+  );
+  
+  // Store ciphertext + salt + IV
+  const encryptedPayload = {
+    salt: Array.from(salt),
+    iv: Array.from(iv),
+    ciphertext: Array.from(new Uint8Array(ciphertext)),
+    createdAt: Date.now(),
+  };
+  
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction([STORE_NAME], 'readwrite');
+    const store = transaction.objectStore(STORE_NAME);
+    
+    const record = {
+      sessionId: vaultKey,  // SHA256(voucherCode) as key
+      createdAt: Date.now(),
+      factSheet: encryptedPayload,  // reuse factSheet field for encrypted blob
+    };
+    
+    const request = store.put(record);
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
+    transaction.oncomplete = () => db.close();
+  });
+}
+
+/**
+ * Retrieve and decrypt a recovery vault from IndexedDB.
+ * Returns null if no vault found or decryption fails.
+ */
+export async function getRecoveryVault(
+  voucherCode: string
+): Promise<RecoveryVaultData | null> {
+  const db = await openDB();
+  const vaultKey = await sha256(voucherCode);
+  
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction([STORE_NAME], 'readonly');
+    const store = transaction.objectStore(STORE_NAME);
+    
+    const request = store.get(vaultKey);
+    
+    request.onsuccess = async () => {
+      const result = request.result as VaultRecord | undefined;
+      if (!result || !result.factSheet) {
+        resolve(null);
+        return;
+      }
+      
+      try {
+        const encrypted = result.factSheet as {
+          salt: number[];
+          iv: number[];
+          ciphertext: number[];
+          createdAt: number;
+        };
+        
+        if (!encrypted.salt || !encrypted.iv || !encrypted.ciphertext) {
+          resolve(null);
+          return;
+        }
+        
+        const salt = new Uint8Array(encrypted.salt);
+        const iv = new Uint8Array(encrypted.iv);
+        const ciphertext = new Uint8Array(encrypted.ciphertext);
+        
+        const key = await deriveKey(voucherCode, salt);
+        
+        const plaintext = await crypto.subtle.decrypt(
+          { name: 'AES-GCM', iv: iv.buffer as ArrayBuffer },
+          key,
+          ciphertext
+        );
+        
+        const decoder = new TextDecoder();
+        const data = JSON.parse(decoder.decode(plaintext)) as RecoveryVaultData;
+        resolve(data);
+      } catch {
+        // Decryption failed — wrong voucher code or corrupted data
+        resolve(null);
+      }
+    };
+    
+    request.onerror = () => reject(request.error);
+    transaction.oncomplete = () => db.close();
+  });
+}
+
+// ── Standard storage (session-based) ────────────────────────────────────────
 
 /**
  * Store a PDF blob in IndexedDB

@@ -21,7 +21,7 @@ const nextConfig = {
   // The canonical way to raise the underlying Node http timeout for rewrites:
   experimental: {
     // proxyTimeout was added in Next.js 14.1 — set to 6 minutes (ms)
-    proxyTimeout: 360_000,
+    proxyTimeout: 540_000,
   },
 
   async headers() {
@@ -38,13 +38,14 @@ const nextConfig = {
             key: "Content-Security-Policy",
             value: [
               "default-src 'self'",
-              "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.paddle.com https://sandbox-cdn.paddle.com https://cdnjs.cloudflare.com",
-              "frame-src 'self' https://sandbox-buy.paddle.com https://buy.paddle.com https://*.paddle.com",
+              "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://sandbox-cdn.paddle.com https://cdn.paddle.com https://cdnjs.cloudflare.com",
+              "script-src-elem 'self' 'unsafe-inline' https://sandbox-cdn.paddle.com https://cdn.paddle.com https://cdnjs.cloudflare.com",
+              "frame-src 'self' https://sandbox-buy.paddle.com https://buy.paddle.com",
               "frame-ancestors 'self'",
-              "connect-src 'self' https://*.paddle.com https://sandbox-checkout-service.paddle.com",
-              "style-src 'self' 'unsafe-inline' https://cdn.paddle.com https://sandbox-cdn.paddle.com",
-              "style-src-elem 'self' 'unsafe-inline' https://cdn.paddle.com https://sandbox-cdn.paddle.com",
-              "img-src 'self' data: https://*.paddle.com",
+              "connect-src 'self' https://sandbox-api.paddle.com https://sandbox-checkout-service.paddle.com https://sandbox-buy.paddle.com https://api.paddle.com",
+              "style-src 'self' 'unsafe-inline' https://sandbox-cdn.paddle.com https://cdn.paddle.com",
+              "style-src-elem 'self' 'unsafe-inline' https://sandbox-cdn.paddle.com https://cdn.paddle.com",
+              "img-src 'self' data: https://sandbox-cdn.paddle.com https://cdn.paddle.com",
               "font-src 'self' data:",
             ].join("; "),
           },

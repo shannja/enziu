@@ -63,6 +63,7 @@ class VerifyPaymentRequest(BaseModel):
 class VerifyPaymentResponse(BaseModel):
     success: bool
     session_id: str
+    voucher_code: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -233,8 +234,21 @@ class PaddleService:
             else:
                 logger.warning("InferenceClient not configured — session not marked as paid")
 
+            # Create a recovery voucher — session_id serves as the passphrase
+            try:
+                voucher = await self.voucher_service.create_voucher(
+                    pack_type="PAYG",
+                    passphrase=body.session_id,
+                    transaction_id=body.transaction_id,
+                )
+                voucher_code = voucher["code"]
+                logger.info("Recovery voucher created — code=%s session=%s", voucher_code[:8], body.session_id)
+            except Exception as e:
+                logger.error("Failed to create recovery voucher: %s", e)
+                voucher_code = None  # Non-fatal — verification still succeeds
+
             # NOTE: The frontend must call Paddle.Checkout.close() upon receiving success=True.
-            return VerifyPaymentResponse(success=True, session_id=body.session_id)
+            return VerifyPaymentResponse(success=True, session_id=body.session_id, voucher_code=voucher_code)
 
 
         @router.post(

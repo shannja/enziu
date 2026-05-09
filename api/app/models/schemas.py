@@ -6,7 +6,7 @@ All request/response models for the API.
 from __future__ import annotations
 
 from pydantic import BaseModel, Field
-from typing import Optional, Literal, Dict, List, Any
+from typing import Optional, Literal, List, Any
 
 
 # ===========================================
@@ -21,22 +21,108 @@ class Grade(BaseModel):
     claimsEfficiency: str = Field(..., description="Claims efficiency grade")
 
 
+# ===========================================
+# Red Flag & Clause Models (Auditor output)
+# ===========================================
+
 class RedFlag(BaseModel):
-    """Red flag with citation."""
-    name: str
-    severity: Literal["high", "medium", "low"]
+    """Red flag from the ENZIU Auditor."""
+    flag_id: str
+    source: Literal["finding_triggered", "structural"]
+    severity: Literal["critical", "major", "minor"]
+    deduction: int
+    page: int | None = None
+    excerpt: str | None = None
+    plain_english: str
+    legal_basis: str = ""
+
+
+class Exclusion(BaseModel):
+    """Policy exclusion."""
+    type: str
+    summary: str
     page: int
-    quote: str
+    risk_level: Literal["low", "medium", "high"]
+    excerpt: str | None = None
 
 
 class Clause(BaseModel):
     """Policy clause with plain English explanation."""
-    id: str
     type: str
+    summary: str
     page: int
-    text: str
-    plainEnglish: str
-    concern: str | None = None
+    risk_level: Literal["low", "medium", "high"]
+
+
+class InsightCard(BaseModel):
+    """Pre-generated FAQ card from the ENZIU Auditor."""
+    question: str
+    answer: str
+    category: Literal["risk", "savings", "action", "comparison", "explain"]
+    priority: int = Field(..., ge=1, le=5)
+    page: int | None = None
+    excerpt: str | None = None  # Verbatim text from PDF that supports this insight
+
+
+class ComparisonReady(BaseModel):
+    """Comparison-ready fields from the ENZIU Auditor."""
+    policy_type: str
+    carrier_name: str | None = None
+    policy_effective_date: str | None = None
+    annual_premium_stated: float | None = None
+    deductible_stated: float | None = None
+
+
+# ===========================================
+# Score Models (Auditor output sub-structure)
+# ===========================================
+
+class SubScores(BaseModel):
+    reading_grade: int = 0
+    jargon_density: int = 0
+    definitions_completeness: int = 0
+    passive_voice: int = 0
+    navigability: int = 0
+
+
+class ClarityScore(BaseModel):
+    score: int = 0
+    grade: str = "C"
+    sub_scores: SubScores = Field(default_factory=SubScores)
+    estimated_grade_level: int = 12
+    reasoning: str = ""
+
+
+class CoverageSubScores(BaseModel):
+    exclusion_volume: int = 0
+    waiting_period: int = 0
+    sub_limit_transparency: int = 0
+    pre_existing: int = 0
+    renewability: int = 0
+
+
+class CoverageScore(BaseModel):
+    score: int = 0
+    grade: str = "C"
+    sub_scores: CoverageSubScores = Field(default_factory=CoverageSubScores)
+    exclusion_count: int = 0
+    reasoning: str = ""
+
+
+class ClaimEfficiencySubScores(BaseModel):
+    filing_clarity: int = 0
+    appeal_rights: int = 0
+    payout_timeline: int = 0
+    dispute_resolution: int = 0
+
+
+class ClaimEfficiencyScore(BaseModel):
+    score: int = 0
+    grade: str = "C"
+    sub_scores: ClaimEfficiencySubScores = Field(default_factory=ClaimEfficiencySubScores)
+    appeal_rights_present: bool = False
+    payout_days_stated: int | None = None
+    reasoning: str = ""
 
 
 # ===========================================
@@ -44,123 +130,49 @@ class Clause(BaseModel):
 # ===========================================
 
 class AnalysisResult(BaseModel):
-    """Complete analysis result for a policy."""
+    """Complete ENZIU analysis result (auditor output + frontend glue)."""
     session_id: str
     grade: Grade
     topRisk: str
-    redFlags: list[str]
-    summary: str
+    redFlags: list[str] = []
+    summary: str = ""
     detailedFlags: list[RedFlag] | None = None
+    exclusions: list[Exclusion] | None = None
     clauses: list[Clause] | None = None
+    insight_cards: list[InsightCard] | None = None
+    clarity: ClarityScore | None = None
+    coverage: CoverageScore | None = None
+    claim_efficiency: ClaimEfficiencyScore | None = None
+    total_deductions: int = 0
+    plain_english_summary: str = ""
+    comparison_ready: ComparisonReady | None = None
 
 
 class UploadResponse(BaseModel):
-    """Response for PDF upload endpoint."""
+    """Response for PDF upload / sneak peek."""
     session_id: str
     grade: Grade
     topRisk: str
     redFlags: list[str]
     summary: str
+    policy_type: str = "other"
+    carrier_name: str | None = None
 
 
 # ===========================================
-# Fact Sheet Models
+# Audit Models
 # ===========================================
-
-class LiabilityLimit(BaseModel):
-    """Liability limit with page citation."""
-    description: str
-    amount: str
-    page: int
-
-
-class Exclusion(BaseModel):
-    """Policy exclusion with page citation."""
-    type: str
-    description: str
-    page: int
-
-
-class FactSheetClause(BaseModel):
-    """Policy clause with risk assessment."""
-    type: str
-    summary: str
-    page: int
-    risk_level: Literal["low", "medium", "high"]
-
-
-class FactSheetRedFlag(BaseModel):
-    """Red flag with severity assessment."""
-    type: str
-    description: str
-    page: int
-    severity: Literal["low", "medium", "high"]
-
-
-class FactSheet(BaseModel):
-    """Master Policy Fact Sheet from Map-Reduce."""
-    policy_type: str
-    carrier: str
-    effective_date: str
-    grade: Grade
-    liability_limits: List[LiabilityLimit] = []
-    exclusions: List[Exclusion] = []
-    clauses: List[FactSheetClause] = []
-    red_flags: List[FactSheetRedFlag] = []
-    top_risk: str
-    summary: str
-
 
 class AuditRequest(BaseModel):
-    """Request for policy audit using Map-Reduce."""
+    """Request for full policy audit (Phase 2)."""
     session_id: str
     extracted_text: str
 
 
 class AuditResponse(BaseModel):
-    """Response from policy audit."""
+    """Response from full policy audit."""
     session_id: str
-    fact_sheet: Dict[str, Any]
-
-
-# ===========================================
-# Chat Models
-# ===========================================
-
-class ChatRequest(BaseModel):
-    """Request for Deep Dive chat."""
-    session_id: str
-    message: str
-
-
-class ChatWithContextRequest(BaseModel):
-    """Request for Deep Dive chat with context."""
-    session_id: str
-    message: str
-    extracted_text: str = ""  # Legacy: raw policy text
-    fact_sheet: Dict[str, Any] = None  # New: structured fact sheet from Map-Reduce
-
-
-class ChatResponse(BaseModel):
-    """Response from Deep Dive chat."""
-    response: str
-    page: int | None = None
-    excerpt: str | None = None
-    disclaimer: str = "page X — not legal advice"
-
-
-class PolicySummary(BaseModel):
-    """Summary of a policy for comparison."""
-    grade: Grade
-    summary: str
-
-
-class CompareRequest(BaseModel):
-    """Request for comparative analysis."""
-    session_id: str
-    message: str
-    policyA: PolicySummary
-    policyB: PolicySummary
+    report: dict[str, Any]
 
 
 # ===========================================
@@ -193,8 +205,8 @@ class VoucherRecoveryRequest(BaseModel):
 class SessionState(BaseModel):
     """Session state stored in Redis."""
     session_id: str
-    mode: Literal["customer", "broker"]
+    mode: Literal["customer"] = "customer"
     step: str = "idle"
     created_at: float
     expires_at: float
-    chats_remaining: int = 5
+    chats_remaining: int = 0

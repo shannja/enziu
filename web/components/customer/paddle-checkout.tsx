@@ -5,12 +5,13 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { formatCurrency } from "@/lib/utils";
 import { CreditCard, Apple, Smartphone, RefreshCw } from "lucide-react";
+import { storeRecoveryVault, getFactSheet, getText } from "@/lib/pdf-storage";
 
 interface PaddleCheckoutProps {
   amount: number;
   sessionId: string;
   extractedText?: string;
-  onPaymentComplete: () => void;
+  onPaymentComplete: (voucherCode?: string) => void;
 }
 
 declare global {
@@ -101,8 +102,9 @@ export function PaddleCheckout({
   }, [sessionId]);
 
   // ── Polling ──────────────────────────────────────────────────────────────
-  const MAX_ATTEMPTS = 10;
-  const POLL_INTERVAL_MS = 20_000;
+  const MAX_ATTEMPTS = 15;
+  const POLL_INTERVAL_MS = 10_000;
+  const CLOSED_GRACE_PERIOD_MS = 3000; // Grace period after checkout.closed before resetting
 
   function stopPaymentPolling() {
     if (pollingIntervalRef.current) {
@@ -172,7 +174,9 @@ export function PaddleCheckout({
       }
 
       // Environment must be set before Initialize
-      window.Paddle.Environment.set("sandbox");
+      window.Paddle.Environment.set(
+        process.env.NEXT_PUBLIC_PADDLE_SANDBOX === "true" ? "sandbox" : "production"
+      );
       window.Paddle.Initialize({
         token: clientToken,
         eventCallback: (event: PaddleEvent) => {
@@ -186,10 +190,32 @@ export function PaddleCheckout({
             document.body.style.overflow = ""; // Restore body scroll
             // Only reset if payment did NOT complete — avoid wiping a successful flow
             if (!paymentCompletedRef.current) {
-              setIsProcessing(false);
               const stored = getStoredPayment();
               if (stored?.sessionId === sessionId && stored.status === "pending") {
-                clearStoredPayment();
+                // Grace period: wait a bit in case checkout.completed is still processing
+                console.log("[Paddle] checkout.closed fired, waiting for grace period...");
+                setTimeout(() => {
+                  // Check if payment completed during grace period
+                  const updatedStored = getStoredPayment();
+                  if (updatedStored?.status === "paid") {
+                    console.log("[Paddle] Payment completed during grace period");
+                    return;
+                  }
+                  // If still pending, start/continue polling
+                  console.log("[Paddle] Payment still pending after grace period, starting polling");
+                  setIsProcessing(false);
+                  startPaymentPolling();
+                }, CLOSED_GRACE_PERIOD_MS);
+              } else {
+                // User closed checkout without completing payment — just reset, no polling
+                console.log("[Paddle] User closed checkout without payment");
+                setIsProcessing(false);
+                // Clear any pending status since user explicitly cancelled
+                if (stored?.sessionId === sessionId) {
+                  clearStoredPayment();
+                }
+                // Clear any error from previous attempts
+                setError(null);
               }
             }
           }
@@ -217,7 +243,7 @@ export function PaddleCheckout({
   }, []);
 
   // ── Verify payment with exponential backoff ──────────────────────────────
-  async function verifyPaymentWithRetry(txnId: string, maxRetries = 3): Promise<void> {
+  async function verifyPaymentWithRetry(txnId: string, maxRetries = 3): Promise<{ success: boolean; voucher_code: string | null }> {
     let lastError: Error = new Error("Unknown verification error");
 
     for (let attempt = 0; attempt < maxRetries; attempt++) {
@@ -231,9 +257,9 @@ export function PaddleCheckout({
         body: JSON.stringify({ transaction_id: txnId, session_id: sessionId }),
       });
 
-      if (res.ok) return; // success
-
       const body = await res.json().catch(() => ({}));
+
+      if (res.ok) return body; // success — return the full response
 
       if (res.status === 400) {
         throw new Error(body.detail || "Invalid transaction ID");
@@ -260,17 +286,35 @@ export function PaddleCheckout({
     setError(null);
 
     try {
-      await verifyPaymentWithRetry(txnId);
+      const result = await verifyPaymentWithRetry(txnId);
 
       // Persist confirmed status before closing overlay
       setStoredPayment({ sessionId, status: "paid", timestamp: Date.now() });
+
+      // Store encrypted recovery vault if we got a voucher code
+      if (result.voucher_code) {
+        try {
+          const factSheet = await getFactSheet(sessionId);
+          const extractedText = await getText(sessionId);
+          if (factSheet && extractedText) {
+            await storeRecoveryVault(result.voucher_code, {
+              factSheet,
+              extractedText,
+              sessionId,
+            });
+            console.log('[Paddle] Recovery vault stored with voucher code');
+          }
+        } catch (err) {
+          console.error('[Paddle] Failed to store recovery vault:', err);
+        }
+      }
 
       // Close the Paddle overlay — Paddle v2 does NOT auto-close on completion
       window.Paddle?.Checkout.close();
       document.body.style.overflow = ""; // Restore body scroll
 
       clearStoredPayment();
-      onPaymentComplete();
+      onPaymentComplete(result.voucher_code || undefined);
     } catch (err) {
       paymentCompletedRef.current = false;
       setError(err instanceof Error ? err.message : "Verification failed. Please contact support.");

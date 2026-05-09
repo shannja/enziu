@@ -16,7 +16,9 @@ from __future__ import annotations
 
 import gc
 import io
+import json
 import logging
+import re
 import time
 from typing import Any, Callable, Optional
 
@@ -32,6 +34,33 @@ from ..config import settings
 # Configure logging for PDF extraction
 logger = logging.getLogger("pdf_extractor")
 logger.setLevel(logging.DEBUG if settings.debug else logging.INFO)
+
+# ── Printed page number stripping ────────────────────────────────────────
+# Insurance policy PDFs often have a printed page number (e.g., "8") that
+# differs from the physical PDF page index.  This regex strips standalone
+# leading numbers, "Page X of Y", and bare "X / Y" footers so the LLM sees
+# only the JSON page_number field — never a conflicting in-text number.
+_PRINTED_PAGE_RE = re.compile(
+    r"^\s*\d{1,4}\s*\n",  # "8\n" — bare printed page number at top
+)
+
+_PAGE_HEADER_RE = re.compile(
+    r"^\s*Page\s+\d{1,4}\s+of\s+\d{1,4}\s*\n",  # "Page 8 of 24\n"
+    re.IGNORECASE,
+)
+
+_PAGE_FOOTER_RE = re.compile(
+    r"\n\s*\d{1,4}\s*\/\s*\d{1,4}\s*$",  # trailing "8 / 24"
+)
+
+def _strip_printed_page_number(text: str) -> str:
+    """Remove printed page numbers and headers from extracted page text."""
+    if not text:
+        return text
+    cleaned = _PRINTED_PAGE_RE.sub("", text)
+    cleaned = _PAGE_HEADER_RE.sub("", cleaned)
+    cleaned = _PAGE_FOOTER_RE.sub("", cleaned)
+    return cleaned
 
 
 class PDFMetadata:
@@ -117,10 +146,11 @@ class PDFExtractor:
                 page_time = time.time() - page_start
                 
                 if text.strip():
-                    char_count = len(text)
+                    cleaned = _strip_printed_page_number(text)
+                    char_count = len(cleaned)
                     total_chars += char_count
-                    text_parts.append(f"[Page {page_num + 1}]\n{text}")
-                    logger.debug(f"Page {page_num + 1} extracted - {char_count} chars in {page_time:.3f}s")
+                    text_parts.append(f"[Page {page_num + 1}]\n{cleaned}")
+                    logger.debug(f"Page {page_num + 1} extracted - {char_count} chars (stripped) in {page_time:.3f}s")
                 else:
                     logger.debug(f"Page {page_num + 1} - no text content")
             
@@ -160,8 +190,9 @@ class PDFExtractor:
                 page = doc[page_num]
                 text = page.get_text("text")
                 if text.strip():
-                    result[page_num + 1] = text
-                    total_chars += len(text)
+                    cleaned = _strip_printed_page_number(text)
+                    result[page_num + 1] = cleaned
+                    total_chars += len(cleaned)
             
             elapsed = time.time() - start_time
             logger.info(f"Page-by-page extraction completed - {len(result)} pages with text, {total_chars} chars, {elapsed:.3f}s")
@@ -332,10 +363,11 @@ class PDFExtractor:
                 text = page.get_text("text")
                 
                 if text.strip():
-                    char_count = len(text)
+                    cleaned = _strip_printed_page_number(text)
+                    char_count = len(cleaned)
                     total_chars += char_count
                     pages_with_text += 1
-                    text_parts.append(f"[Page {page_num + 1}]\n{text}")
+                    text_parts.append(f"[Page {page_num + 1}]\n{cleaned}")
                 else:
                     empty_pages += 1
                 
@@ -359,6 +391,36 @@ class PDFExtractor:
             doc.close()
             gc.collect()
     
+    def extract_text_json(self, buffer: io.BytesIO) -> str:
+        """
+        Extract text as a JSON array of pages for LLM consumption.
+        Each page is a dict with page_number and text, giving the LLM
+        explicit page boundaries for accurate citations.
+        
+        Args:
+            buffer: io.BytesIO buffer containing PDF data
+            
+        Returns:
+            JSON string: [{"page_number": 1, "text": "..."}, ...]
+        """
+        start_time = time.time()
+        logger.debug("Starting JSON page extraction")
+        
+        pages = self.extract_text_by_page(buffer)
+        result = [
+            {"page_number": page, "text": text}
+            for page, text in sorted(pages.items())
+        ]
+        
+        logger.info(
+            f"JSON extraction completed — {len(result)} pages, "
+            f"{sum(len(p['text']) for p in result)} total chars, "
+            f"{time.time() - start_time:.3f}s"
+        )
+        
+        return json.dumps(result, ensure_ascii=False)
+
+
     def get_page_count(self, buffer: io.BytesIO) -> int:
         """
         Get the total number of pages in the PDF.

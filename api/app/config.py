@@ -24,15 +24,13 @@ class Settings(BaseSettings):
     debug: bool = False
     api_prefix: str = "/api"
 
-    # Inference Service (LLM API - e.g., Llama 3.3 70B Instruct)
+    # Inference Service (LLM API)
     # Provider-agnostic - works with NScale, OpenAI, Anthropic, etc.
     inference_api_key: str = ""
     inference_api_base: str = "https://inference.api.nscale.com/v1"
-    inference_model: str = "meta-llama/Llama-3.3-70B-Instruct"
+    inference_model: str = "meta-llama/Llama-4-Scout-17B-16E-Instruct"
+    auditor_model: str = "meta-llama/Llama-3.3-70B-Instruct"
     
-    # All inference goes through a single model (Llama 4 Scout 17B, 890K context)
-    # No separate sneak peek or chat models needed
-
     # Upstash Redis
     upstash_redis_rest_url: str = ""
     upstash_redis_rest_token: str = ""

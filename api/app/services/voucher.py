@@ -47,21 +47,52 @@ _store: dict[str, dict[str, Any]] = {}
 # Character set excludes I, O, 0, 1 to avoid visual confusion
 _CHARSET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 _CODE_PATTERN = re.compile(
-    r"^ENZ-[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$"
+    r"^ENZ-[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{2}$"
 )
 
 
+def _compute_checksum(code_12: str) -> str:
+    """
+    Compute a 2-character checksum from 12 random chars (without dashes).
+    code_12: e.g. 'A7K3M9X2QR5J'
+    Returns 2 chars from _CHARSET.
+    """
+    total = sum(_CHARSET.index(c) for c in code_12)
+    mod = total % (len(_CHARSET) * len(_CHARSET))  # 30*30 = 900
+    return _CHARSET[mod // len(_CHARSET)] + _CHARSET[mod % len(_CHARSET)]
+
+
+def _verify_checksum(code: str) -> bool:
+    """
+    Verify the checksum of a full voucher code.
+    Strips dashes, extracts the 12 base chars and 2 check chars, recomputes.
+    """
+    flat = code.replace("-", "").upper()
+    if len(flat) != 14:
+        return False
+    base = flat[:12]
+    check = flat[12:14]
+    return _compute_checksum(base) == check
+
+
 def _generate_code() -> str:
-    """Generate a cryptographically secure voucher code: ENZ-XXXX-XXXX-XXXX"""
+    """Generate a cryptographically secure voucher code: ENZ-XXXX-XXXX-XXXX-CC"""
     segments = [
         "".join(secrets.choice(_CHARSET) for _ in range(4))
         for _ in range(3)
     ]
-    return f"ENZ-{segments[0]}-{segments[1]}-{segments[2]}"
+    base = f"ENZ-{segments[0]}-{segments[1]}-{segments[2]}"
+    base_flat = base.replace("-", "").replace("ENZ", "")
+    checksum = _compute_checksum(base_flat)
+    return f"{base}-{checksum}"
 
 
 def _valid_format(code: str) -> bool:
-    return bool(_CODE_PATTERN.match(code.upper()))
+    """Validate format AND checksum."""
+    code = code.upper().strip()
+    if not _CODE_PATTERN.match(code):
+        return False
+    return _verify_checksum(code)
 
 
 # ---------------------------------------------------------------------------

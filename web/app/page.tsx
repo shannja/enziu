@@ -4,7 +4,6 @@ import { useState, useEffect } from "react";
 import { Header } from "@/components/header";
 import { Footer } from "@/components/footer";
 import { CustomerMode } from "@/components/customer/customer-mode";
-import { BrokerMode } from "@/components/broker/broker-mode";
 import { motion } from "framer-motion";
 import { useMode } from "@/context/ModeContext";
 
@@ -33,13 +32,9 @@ export default function Home() {
         transition={{ duration: 0.5, delay: 0.2, ease: "easeOut" }}
         className="container mx-auto px-4 py-8"
       >
-        {/* Main Content - Dropzones */}
+        {/* Main Content - Customer Mode Only */}
         <div className="max-w-4xl mx-auto">
-          {mode === "customer" ? (
-            <CustomerMode />
-          ) : (
-            <BrokerMode />
-          )}
+          <CustomerMode />
         </div>
       </motion.div>
 

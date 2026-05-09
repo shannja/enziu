@@ -118,7 +118,7 @@ export function SneakPeekBento({ result }: SneakPeekBentoProps) {
 
         {/* Red Flags Card */}
         <motion.div variants={itemVariants}>
-          <Card className="bento-card bg-card/50 border-border h-full">
+          <Card className="bento-card bg-card/50 border-border h-full ">
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
                 <Shield className="w-4 h-4 text-brand-grade-f"/>
@@ -150,8 +150,27 @@ export function SneakPeekBento({ result }: SneakPeekBentoProps) {
                 Summary
               </CardTitle>
             </CardHeader>
-            <CardContent>
-              <p className="line-clamp-3">{summary}</p>
+            <CardContent className="relative overflow-hidden">
+              <p className="text-foreground/90 leading-relaxed line-clamp-3">{summary}</p>
+
+              {/* Blur layer — masked */}
+              <div
+                className="absolute inset-0 pointer-events-none"
+                style={{
+                  WebkitMaskImage: 'linear-gradient(to bottom, transparent 0%, transparent 5%, black 100%)',
+                  maskImage: 'linear-gradient(to bottom, transparent 0%, transparent 5%, black 100%)',
+                  backdropFilter: 'blur(512px)',
+                  WebkitBackdropFilter: 'blur(512px)',
+                }}
+              />
+
+              {/* Color fade layer — transparent, then fades to card bg */}
+              <div
+                className="absolute inset-0 pointer-events-none"
+                style={{
+                  background: 'linear-gradient(to bottom, transparent 0%, transparent 5%, hsl(var(--card) / 0.9) 50%, hsl(var(--card)) 100%)',
+                }}
+              />
             </CardContent>
           </Card>
         </motion.div>
