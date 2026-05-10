@@ -1,6 +1,6 @@
 # 🏆 ENZIU — Universal Insurance Transparency Engine
 
-> **AMD Developer Hackathon 2024 Submission**  
+> **AMD Developer Hackathon 2026 Submission**  
 > 🤖 **Track 1: AI Agents & Agentic Workflows**  
 > ⚡ Powered by Llama 4 Scout 17B + Llama 3.3 70B on AMD Developer Cloud
 
@@ -404,7 +404,6 @@ MIT License — see [LICENSE](LICENSE) for details.
 ## 📬 Contact
 
 - **GitHub**: [github.com/shannja/enziu](https://github.com/shannja/enziu)
-- **Demo**: [huggingface.co/spaces/shannja/enziu](https://huggingface.co/spaces/shannja/enziu)
 - **Website**: [enziu.vercel.app](https://enziu.vercel.app)
 
 ---
