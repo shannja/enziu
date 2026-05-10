@@ -640,13 +640,7 @@ export async function getRecoveryVault(
         const data = JSON.parse(rawData) as RecoveryVaultData;
         // Defensive recovery:
         // older vaults may contain nested encrypted factSheet payloads
-        if (
-          data.factSheet &&
-          typeof data.factSheet === "object" &&
-          Array.isArray(data.factSheet.salt) &&
-          Array.isArray(data.factSheet.iv) &&
-          Array.isArray(data.factSheet.ciphertext)
-        ) {
+        if (isEncryptedPayload(data.factSheet)) {
           console.log("[getRecoveryVault] Nested encrypted factSheet detected");
 
           const decryptedFactSheet = await decryptSessionPayload(
@@ -671,8 +665,8 @@ export async function getRecoveryVault(
         console.log('  - extractedText length:', data.extractedText?.length);
         console.log('  - pdfData present:', !!data.pdfData);
         console.log('  - factSheet keys:', data.factSheet ? Object.keys(data.factSheet) : 'null');
-        console.log('  - factSheet has grade:', data.factSheet?.grade ? 'yes' : 'no');
-        console.log('  - factSheet has red_flags:', Array.isArray(data.factSheet?.red_flags) ? 'yes' : 'no');
+        console.log('  - factSheet has grade:', !isEncryptedPayload(data.factSheet) && data.factSheet?.grade ? 'yes' : 'no');
+        console.log('  - factSheet has red_flags:', !isEncryptedPayload(data.factSheet) && Array.isArray(data.factSheet?.red_flags) ? 'yes' : 'no');
         
         resolve(data);
       } catch (error) {
