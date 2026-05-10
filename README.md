@@ -310,7 +310,7 @@ Try ENZIU live on Vercel:
 
 ### Infrastructure
 - **Vercel** — Frontend hosting
-- **AMD Developer Cloud** — GPU compute
+- **AMD Developer Cloud / Nscale** — GPU compute
 - **Paddle** — Payment processing
 
 ---
