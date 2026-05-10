@@ -35,7 +35,7 @@ const nextConfig = {
               "worker-src 'self' blob:",
               "frame-src 'self' https://sandbox-buy.paddle.com",
               "frame-ancestors 'self' https://enziu.vercel.app http://localhost:3000 http://localhost",
-              "connect-src 'self' https://sandbox-api.paddle.com https://sandbox-checkout-service.paddle.com https://sandbox-buy.paddle.com https://sandbox-cdn.paddle.com",
+              "connect-src 'self' https://sandbox-api.paddle.com https://sandbox-checkout-service.paddle.com https://sandbox-buy.paddle.com https://sandbox-cdn.paddle.com https://enziu-backend.up.railway.app",
               "style-src 'self' 'unsafe-inline' https://sandbox-cdn.paddle.com",
               "style-src-elem 'self' 'unsafe-inline' https://sandbox-cdn.paddle.com",
               "img-src 'self' data: https://sandbox-cdn.paddle.com",
