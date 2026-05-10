@@ -102,6 +102,9 @@ export function SneakPeekBento({ result }: SneakPeekBentoProps) {
                   Clarity <span className={getGradeColor(grade.clarity)}>{grade.clarity}</span> • 
                   Coverage <span className={getGradeColor(grade.coverage)}>{grade.coverage}</span> • 
                   Claims <span className={getGradeColor(grade.claimsEfficiency)}>{grade.claimsEfficiency}</span>
+                  <br />
+                  <br />
+                  <p className="text-xs">The overall grade is not the average of Clarity, Coverage, and Claims.<br /><br />There might be red flags, limited coverage, and hidden exclusions that affect the overall grade. </p>
                 </div>
               )}
             </CardContent>

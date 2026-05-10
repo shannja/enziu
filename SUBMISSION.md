@@ -1,4 +1,4 @@
-# AMD Developer Hackathon 2024 — ENZIU Submission
+# AMD Developer Hackathon 2026 — ENZIU Submission
 
 ---
 

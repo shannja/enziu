@@ -267,7 +267,8 @@ export function CustomerMode() {
       setStep("analyzing");
       const formData = new FormData();
       formData.append("file", file);
-      const response = await fetch("/api/extract", { method: "POST", body: formData });
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "/api";
+      const response = await fetch(`${apiUrl}/api/extract`, { method: "POST", body: formData });
       if (!response.ok) {
         const error = await response.json().catch(() => ({}));
         throw new Error(error.detail || "Upload failed");
@@ -414,9 +415,10 @@ export function CustomerMode() {
       if (!extractedText)
         throw new Error("No extracted text found. Please re-upload your PDF.");
 
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "/api";
       const ac  = new AbortController();
       const tid = setTimeout(() => ac.abort(), 480_000);
-      const auditResponse = await fetch("/api/policy/audit", {
+      const auditResponse = await fetch(`${apiUrl}/api/policy/audit`, {
         method:  "POST",
         headers: { "Content-Type": "application/json" },
         body:    JSON.stringify({ session_id: sessionId, extracted_text: extractedText }),
