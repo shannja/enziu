@@ -311,7 +311,6 @@ Try ENZIU live on Vercel:
 ### Infrastructure
 - **Vercel** — Frontend hosting
 - **AMD Developer Cloud** — GPU compute
-- **Upstash Redis** — Session state and voucher log (optional)
 - **Paddle** — Payment processing
 
 ---
@@ -414,5 +413,7 @@ MIT License — see [LICENSE](LICENSE) for details.
 **Built with ⚡ by eseyem Team for AMD Developer Hackathon 2026**
 
 🤖 Track 1: AI Agents & Agentic Workflows
+
+This is a hackathon project only for Lablab.AI's AMD Developer Hackathon. Not a real operating business.
 
 </div>
