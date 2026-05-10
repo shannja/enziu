@@ -182,6 +182,7 @@ await storeRecoveryVault(voucherCode, { factSheet, extractedText, sessionId });
 // Retrieve with just the voucher code
 const data = await getRecoveryVault(voucherCode);
 ```
+Remember that it is stored locally. So if you cleared your browser or used a new machine, it'll be unrecoverable.
 
 ---
 
