@@ -4,14 +4,7 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Key, Loader2, AlertCircle } from "lucide-react";
-import { getRecoveryVault } from "@/lib/pdf-storage";
-
-interface RecoveryVaultData {
-  factSheet: any;
-  extractedText: string;
-  sessionId: string;
-  pdfData?: string;
-}
+import { getRecoveryVault, type RecoveryVaultData } from "@/lib/pdf-storage";
 
 interface VoucherRecoveryProps {
   onRecoveryComplete: (data: RecoveryVaultData) => void;

@@ -523,7 +523,7 @@ export async function decryptFromSessionStorage(
 
 type FactSheetData = Record<string, any>;
 
-interface RecoveryVaultData {
+export interface RecoveryVaultData {
   factSheet: FactSheetData | EncryptedPayload;
   extractedText: string | null;
   sessionId: string;

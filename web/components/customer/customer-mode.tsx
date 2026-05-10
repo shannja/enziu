@@ -15,6 +15,7 @@ import {
   storeEncryptedFactSheet, getEncryptedFactSheet,
   storeRecoveryVault, getRecoveryVault, blobToDataURL,
   encryptForSessionStorage, decryptFromSessionStorage,
+  type RecoveryVaultData,
 } from "@/lib/pdf-storage";
 import { VoucherRecovery } from "./voucher-recovery";
 
@@ -472,27 +473,23 @@ export function CustomerMode() {
 
   // ── Voucher Recovery ───────────────────────────────────────────────────────
 
-  const handleVoucherRecovery = async (data: {
-    factSheet: any;
-    extractedText: string;
-    sessionId: string;
-    pdfData?: string;
-  }) => {
+  const handleVoucherRecovery = async (data: RecoveryVaultData) => {
     console.log('[CustomerMode] handleVoucherRecovery called with:');
     console.log('  - sessionId:', data.sessionId);
     console.log('  - extractedText length:', data.extractedText?.length);
     console.log('  - pdfData present:', !!data.pdfData);
     console.log('  - factSheet type:', typeof data.factSheet);
-    console.log('  - factSheet keys:', data.factSheet ? Object.keys(data.factSheet) : 'null');
-    console.log('  - factSheet has grade:', data.factSheet?.grade ? 'yes' : 'no');
-    console.log('  - factSheet has red_flags:', Array.isArray(data.factSheet?.red_flags) ? 'yes' : 'no');
-    console.log('  - factSheet has overall:', data.factSheet?.grade?.overall ? 'yes' : 'no');
+    console.log('  - factSheet keys:', data.factSheet && !Array.isArray(data.factSheet) && typeof data.factSheet === 'object' && 'salt' in data.factSheet ? 'encrypted payload' : Object.keys(data.factSheet as any || {}));
+    console.log('  - factSheet has grade:', data.factSheet && typeof data.factSheet === 'object' && !Array.isArray(data.factSheet) && !('salt' in data.factSheet) && (data.factSheet as any).grade ? 'yes' : 'no');
+    console.log('  - factSheet has red_flags:', data.factSheet && typeof data.factSheet === 'object' && !Array.isArray(data.factSheet) && !('salt' in data.factSheet) && Array.isArray((data.factSheet as any).red_flags) ? 'yes' : 'no');
+    console.log('  - factSheet has overall:', data.factSheet && typeof data.factSheet === 'object' && !Array.isArray(data.factSheet) && !('salt' in data.factSheet) && (data.factSheet as any).grade?.overall ? 'yes' : 'no');
 
     setSessionId(data.sessionId);
-    // Store encrypted text in sessionStorage
-    const encryptedText = await encryptForSessionStorage(data.extractedText, data.sessionId);
+    // Store encrypted text in sessionStorage - handle null case
+    const textToEncrypt = data.extractedText || "";
+    const encryptedText = await encryptForSessionStorage(textToEncrypt, data.sessionId);
     sessionStorage.setItem("enziu_vault", encryptedText);
-    storeEncryptedText(data.sessionId, data.extractedText).catch(console.error);
+    storeEncryptedText(data.sessionId, textToEncrypt).catch(console.error);
     if (data.pdfData) setRecoveredPdfData(data.pdfData);
 
     console.log('[CustomerMode] Calling unwrapFactSheet...');
