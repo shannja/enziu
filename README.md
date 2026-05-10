@@ -279,9 +279,9 @@ API_SECRET_KEY=openssl rand -hex 32
 
 ## 📊 Live Demo
 
-Try ENZIU live on Hugging Face:
+Try ENZIU live on Vercel:
 
-👉 **[enziu.huggingface.co](https://huggingface.co/spaces/shannja/enziu)**
+👉 **[enziu.vercel.app](https://enziu.vercel.app)**
 
 ---
 
@@ -311,7 +311,7 @@ Try ENZIU live on Hugging Face:
 ### Infrastructure
 - **Vercel** — Frontend hosting
 - **AMD Developer Cloud** — GPU compute
-- **Upstash Redis** — Session state (optional)
+- **Upstash Redis** — Session state and voucher log (optional)
 - **Paddle** — Payment processing
 
 ---
@@ -411,7 +411,7 @@ MIT License — see [LICENSE](LICENSE) for details.
 
 <div align="center">
 
-**Built with ⚡ by ENZIU Team for AMD Developer Hackathon 2024**
+**Built with ⚡ by eseyem Team for AMD Developer Hackathon 2026**
 
 🤖 Track 1: AI Agents & Agentic Workflows
 
