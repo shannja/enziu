@@ -2,7 +2,7 @@
 
 > **AMD Developer Hackathon 2026 Submission**  
 > 🤖 **Track 1: AI Agents & Agentic Workflows**  
-> ⚡ Powered by Llama 4 Scout 17B + Llama 3.3 70B on AMD Developer Cloud
+> ⚡ Powered by Llama 4 Scout 17B + Llama 3.3 70B on AMD Developer Cloud / Nscale
 
 ---
 
