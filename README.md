@@ -18,7 +18,7 @@ You might think *"ChatGPT or Claude can summarize PDFs"* — and you'd be right.
 
 ## ✨ The Solution
 
-ENZIU is a **multi-agent AI auditing system** that doesn't just read your policy — it **audits, scores, and grades it** with the precision of a licensed insurance bad-faith attorney.
+ENZIU is a **multi-agent AI auditing system** that doesn't just read your policy — it **audits, scores, and grades it** with the precision of an insurance auditor.
 
 ### 🔑 Key Differentiators
 
