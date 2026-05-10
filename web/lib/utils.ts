@@ -40,8 +40,19 @@ export function getGradeColor(grade: string): string {
     D: "text-brand-grade-d",
     "D-": "text-brand-grade-d",
     F: "text-brand-grade-f",
+    "N/A": "text-muted-foreground",
   };
   return colors[grade] || "text-muted-foreground";
+}
+
+/** Check if a grade is a valid letter grade (A+ to F) or N/A */
+export function isValidGrade(grade: string): boolean {
+  return ["A+", "A", "A-", "B+", "B", "B-", "C+", "C", "C-", "D+", "D", "D-", "F", "N/A"].includes(grade);
+}
+
+/** Check if a grade is N/A (not applicable) */
+export function isNaGrade(grade: string): boolean {
+  return grade === "N/A";
 }
 
 export function generateSessionId(): string {

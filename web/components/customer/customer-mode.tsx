@@ -8,6 +8,7 @@ import { FullReport } from "./full-report";
 import { DeepDiveQuestions } from "./deep-dive-questions";
 import { motion, AnimatePresence } from "framer-motion";
 import type { AnalysisResult } from "@/types";
+import { isNaGrade } from "@/lib/utils";
 import {
   storePDF, storeEncryptedText, getEncryptedText, getFactSheet, storeFactSheet,
   getPDF, deleteSession, cleanupExpiredSessions, cleanupOrphanedSessions,
@@ -132,7 +133,7 @@ export function CustomerMode() {
     }
 
     const gradeObj        = factSheet.grade         || {};
-    const overallGrade    = gradeObj.overall         || "C";
+    const overallGrade    = (gradeObj.overall === "N/A" || gradeObj.overall) ? gradeObj.overall : "C";
     const redFlagsArray   = Array.isArray(factSheet.red_flags)    ? factSheet.red_flags    : [];
     const exclusionsArray = Array.isArray(factSheet.exclusions)   ? factSheet.exclusions   : [];
     const clausesArray    = Array.isArray(factSheet.clauses)      ? factSheet.clauses      : [];
@@ -146,9 +147,9 @@ export function CustomerMode() {
       session_id: sid,
       grade: {
         overall:          overallGrade,
-        clarity:          gradeObj.clarity          || overallGrade,
-        coverage:         gradeObj.coverage         || overallGrade,
-        claimsEfficiency: gradeObj.claimsEfficiency || overallGrade,
+        clarity:          (gradeObj.clarity === "N/A" || gradeObj.clarity) ? gradeObj.clarity : overallGrade,
+        coverage:         (gradeObj.coverage === "N/A" || gradeObj.coverage) ? gradeObj.coverage : overallGrade,
+        claimsEfficiency: (gradeObj.claimsEfficiency === "N/A" || gradeObj.claimsEfficiency) ? gradeObj.claimsEfficiency : overallGrade,
       },
       topRisk: factSheet.top_risk
         || (redFlagsArray.length > 0 ? redFlagsArray[0].plain_english : "No major risks detected"),
@@ -317,20 +318,56 @@ export function CustomerMode() {
   /** Store the unwrapped factSheet in the recovery vault (no envelope). */
   const saveRecoveryVault = async (sid: string, factSheet: any) => {
     if (!voucherCode) return;
+
     try {
-      // Decrypt text from sessionStorage or get from IndexedDB
+      let normalizedFactSheet = factSheet;
+
+      // HARD GUARANTEE:
+      // recovery vault NEVER stores encrypted nested payloads
+      if (
+        normalizedFactSheet &&
+        typeof normalizedFactSheet === "object" &&
+        Array.isArray(normalizedFactSheet.salt) &&
+        Array.isArray(normalizedFactSheet.iv) &&
+        Array.isArray(normalizedFactSheet.ciphertext)
+      ) {
+        console.log("[saveRecoveryVault] Nested encrypted payload detected");
+
+        const decrypted = await getEncryptedFactSheet(sid);
+
+        if (!decrypted) {
+          throw new Error("Failed to decrypt factSheet before vault storage");
+        }
+
+        normalizedFactSheet = decrypted;
+      }
+
+      console.log(
+        "[saveRecoveryVault] Final factSheet keys:",
+        Object.keys(normalizedFactSheet || {})
+      );
+
       const sessionText = sessionStorage.getItem("enziu_vault");
+
       const extractedText = sessionText
         ? await decryptFromSessionStorage(sessionText, sid)
         : (await getEncryptedText(sid)) || "";
+
       const pdfBlob = await getPDF(sid);
-      const pdfData = pdfBlob ? await blobToDataURL(pdfBlob) : undefined;
-      if (extractedText) {
-        await storeRecoveryVault(voucherCode, { factSheet, extractedText, sessionId: sid, pdfData });
-        console.log("[CustomerMode] Recovery vault saved");
-      }
+      const pdfData = pdfBlob
+        ? await blobToDataURL(pdfBlob)
+        : undefined;
+
+      await storeRecoveryVault(voucherCode, {
+        factSheet: normalizedFactSheet,
+        extractedText,
+        sessionId: sid,
+        pdfData,
+      });
+
+      console.log("[saveRecoveryVault] Recovery vault saved successfully");
     } catch (err) {
-      console.error("[CustomerMode] Failed to save recovery vault:", err);
+      console.error("[saveRecoveryVault] Failed:", err);
     }
   };
 
@@ -441,6 +478,16 @@ export function CustomerMode() {
     sessionId: string;
     pdfData?: string;
   }) => {
+    console.log('[CustomerMode] handleVoucherRecovery called with:');
+    console.log('  - sessionId:', data.sessionId);
+    console.log('  - extractedText length:', data.extractedText?.length);
+    console.log('  - pdfData present:', !!data.pdfData);
+    console.log('  - factSheet type:', typeof data.factSheet);
+    console.log('  - factSheet keys:', data.factSheet ? Object.keys(data.factSheet) : 'null');
+    console.log('  - factSheet has grade:', data.factSheet?.grade ? 'yes' : 'no');
+    console.log('  - factSheet has red_flags:', Array.isArray(data.factSheet?.red_flags) ? 'yes' : 'no');
+    console.log('  - factSheet has overall:', data.factSheet?.grade?.overall ? 'yes' : 'no');
+
     setSessionId(data.sessionId);
     // Store encrypted text in sessionStorage
     const encryptedText = await encryptForSessionStorage(data.extractedText, data.sessionId);
@@ -448,9 +495,19 @@ export function CustomerMode() {
     storeEncryptedText(data.sessionId, data.extractedText).catch(console.error);
     if (data.pdfData) setRecoveredPdfData(data.pdfData);
 
+    console.log('[CustomerMode] Calling unwrapFactSheet...');
     const factSheet = unwrapFactSheet(data.factSheet);
+    console.log('[CustomerMode] After unwrapFactSheet:');
+    console.log('  - factSheet type:', typeof factSheet);
+    console.log('  - factSheet keys:', factSheet ? Object.keys(factSheet) : 'null');
+    console.log('  - factSheet has grade:', factSheet?.grade ? 'yes' : 'no');
+    console.log('  - factSheet has red_flags:', Array.isArray(factSheet?.red_flags) ? 'yes' : 'no');
 
-    if (!isValidFactSheet(factSheet)) {
+    console.log('[CustomerMode] Calling isValidFactSheet...');
+    const isValid = isValidFactSheet(factSheet);
+    console.log('[CustomerMode] isValidFactSheet result:', isValid);
+
+    if (!isValid) {
       console.error(
         "[CustomerMode] Recovery factSheet failed shape check. Keys:",
         factSheet && typeof factSheet === "object"
@@ -516,14 +573,14 @@ export function CustomerMode() {
               Complex insurance policies, simplified. Upload for instant scoring and clarity.
             </p>
             <CustomerDropzone onFileUploaded={handleFileUploaded} />
-            {/* <div className="mt-6">
+            <div className="mt-6">
               <button
                 onClick={() => setStep("recovery")}
                 className="text-sm text-muted-foreground hover:text-brand-amber transition-colors underline underline-offset-2"
               >
                 Already paid? Recover your report
               </button>
-            </div> */}
+            </div>
           </motion.div>
         )}
 
@@ -570,13 +627,15 @@ export function CustomerMode() {
         {step === "sneak-peek" && analysisResult && (
           <motion.div key="sneak-peek" {...fadeInUp} className="py-8">
             <SneakPeekBento result={analysisResult} />
-            <div className="mt-8 text-center">
-              <PaddleCheckout
-                amount={4.99}
-                sessionId={sessionId || ""}
-                onPaymentComplete={handlePaymentComplete}
-              />
-            </div>
+            {!isNaGrade(analysisResult.grade.overall) && (
+              <div className="mt-8 text-center">
+                <PaddleCheckout
+                  amount={4.99}
+                  sessionId={sessionId || ""}
+                  onPaymentComplete={handlePaymentComplete}
+                />
+              </div>
+            )}
           </motion.div>
         )}
 

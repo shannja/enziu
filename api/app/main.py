@@ -22,7 +22,6 @@ from .config import settings
 from .models.schemas import (
     AuditRequest,
     AuditResponse,
-    VoucherRecoveryRequest,
     VoucherValidationRequest,
     VoucherValidationResponse,
 )
@@ -61,7 +60,7 @@ if not logger.handlers:
 pdf_extractor = PDFExtractor()
 inference_client = InferenceClient()
 voucher_service = VoucherService()
-paddle_service = PaddleService(voucher_service=voucher_service, inference_client=inference_client)
+paddle_service = PaddleService(voucher_service=voucher_service)
 
 
 # ---------------------------------------------------------------------------
@@ -237,22 +236,6 @@ async def validate_voucher(
         )
     except Exception as e:
         return VoucherValidationResponse(valid=False, error=str(e))
-
-
-@limiter.limit(RATE_LIMITS["voucher"])
-@app.post("/api/voucher/recover")
-async def recover_voucher(
-    request: Request, body: VoucherRecoveryRequest
-) -> JSONResponse:
-    """
-    Recover a lost voucher using the passphrase (which is the session_id).
-    Returns the session_id so the client can re-fetch the cached report.
-    """
-    try:
-        result = await voucher_service.recover(passphrase=body.passphrase)
-        return JSONResponse(content=result)
-    except Exception as e:
-        raise HTTPException(status_code=404, detail=str(e))
 
 
 @limiter.limit(RATE_LIMITS["voucher"])

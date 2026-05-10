@@ -193,11 +193,6 @@ class VoucherValidationResponse(BaseModel):
     error: str | None = None
 
 
-class VoucherRecoveryRequest(BaseModel):
-    """Request to recover a voucher code."""
-    passphrase: str
-
-
 # ===========================================
 # Session Models
 # ===========================================

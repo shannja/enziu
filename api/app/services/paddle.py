@@ -24,7 +24,6 @@ from ..config import settings, MIN_PASSPHRASE_LENGTH, PRICE_ID_PREFIX, TRANSACTI
 
 if TYPE_CHECKING:
     from .voucher import VoucherService
-    from .inference import InferenceClient
 
 logger = logging.getLogger("paddle")
 logger.setLevel(logging.DEBUG if settings.debug else logging.INFO)
@@ -75,9 +74,8 @@ class PaddleService:
     Service for interacting with Paddle Billing API.
     """
 
-    def __init__(self, voucher_service: "VoucherService", inference_client: "InferenceClient | None" = None) -> None:
+    def __init__(self, voucher_service: "VoucherService") -> None:
         self.voucher_service = voucher_service
-        self.inference_client = inference_client
         self.api_base = PADDLE_API_BASE
         logger.info("PaddleService initialized - API base: %s", self.api_base)
 
@@ -223,17 +221,6 @@ class PaddleService:
                 detail = status_messages.get(txn_status, f"Transaction not completed (status='{txn_status}'). Please try again.")
                 raise HTTPException(status_code=status.HTTP_402_PAYMENT_REQUIRED, detail=detail)
 
-            # Mark session as paid in Redis
-            if self.inference_client:
-                try:
-                    await self.inference_client.mark_session_paid(body.session_id)
-                    logger.info("Session marked as paid — session=%s txn=%s", body.session_id, body.transaction_id)
-                except Exception as e:
-                    logger.error("Failed to mark session as paid: %s", e)
-                    # Non-fatal — payment is verified, continue
-            else:
-                logger.warning("InferenceClient not configured — session not marked as paid")
-
             # Create a recovery voucher — session_id serves as the passphrase
             try:
                 voucher = await self.voucher_service.create_voucher(
@@ -264,8 +251,8 @@ class PaddleService:
             Paddle sends signed webhook events for payment lifecycle changes.
             Reliable production backup to the client-side checkout.completed event.
 
-            Verified events:
-              transaction.completed → mark session as paid
+            Logged events:
+              transaction.completed → session_id logged for monitoring
               transaction.payment_failed → logged for monitoring
             """
             raw_body = await request.body()
@@ -293,13 +280,7 @@ class PaddleService:
                 custom_data: dict = txn.get("custom_data") or {}
                 session_id: str = custom_data.get("session_id", "")
 
-                if session_id and self.inference_client:
-                    try:
-                        await self.inference_client.mark_session_paid(session_id)
-                        logger.info("Session marked as paid via webhook — session=%s txn=%s", session_id, txn_id)
-                    except Exception as e:
-                        logger.error("Failed to mark session as paid via webhook: %s", e)
-                elif not session_id:
+                if not session_id:
                     logger.warning("transaction.completed webhook without session_id — txn=%s", txn_id)
 
             elif event_type == "transaction.payment_failed":

@@ -159,10 +159,7 @@ async def _decrement_credits(code: str) -> int:
 # ---------------------------------------------------------------------------
 
 PACKS: dict[str, dict[str, Any]] = {
-    "PAYG":    {"price": 4.99,  "credits": 1,  "chats_per_session": 5},
-    "Starter": {"price": 50.00, "credits": 10, "chats_per_session": 10},
-    "Pro":     {"price": 100.00,"credits": 25, "chats_per_session": 20},
-    "Office":  {"price": 200.00,"credits": 50, "chats_per_session": 20},
+    "PAYG": {"price": 4.99, "credits": 1, "chats_per_session": 5},
 }
 
 
@@ -190,7 +187,7 @@ class VoucherService:
         Generate and persist a new voucher after a confirmed Paddle payment.
 
         Args:
-            pack_type:      One of PAYG | Starter | Pro | Office
+            pack_type:      One of PAYG
             passphrase:     User-chosen recovery passphrase (min 8 chars)
             transaction_id: Paddle transaction ID — stored for audit only
 
@@ -277,30 +274,6 @@ class VoucherService:
             "credits": credits,
             "pack_type": record.get("pack_type", "Unknown"),
         }
-
-    # ------------------------------------------------------------------
-    # Recover
-    # ------------------------------------------------------------------
-
-    async def recover(self, passphrase: str) -> dict[str, Any]:
-        """
-        Recover a voucher code by scanning for a matching passphrase hash.
-        No email required.
-
-        NOTE: For production with Redis, maintain a secondary index:
-            passphrase_prefix → [code, ...] to avoid full scan.
-        """
-        for code, record in _store.items():
-            if _check_passphrase(passphrase, record.get("passphrase_hash", "")):
-                logger.info("Voucher recovered — code=%s...", code[:8])
-                return {
-                    "found": True,
-                    "code": code,
-                    "credits": record.get("credits", 0),
-                    "pack_type": record.get("pack_type"),
-                }
-
-        return {"found": False, "error": "No voucher found for this passphrase"}
 
     # ------------------------------------------------------------------
     # Decrement

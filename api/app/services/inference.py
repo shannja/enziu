@@ -339,20 +339,22 @@ def _fallback_facts() -> Dict[str, Any]:
     }
 
 
-def _error_report(message: str) -> Dict[str, Any]:
+def _error_report(message: str, is_non_insurance: bool = False) -> Dict[str, Any]:
+    # For non-insurance documents, use "N/A" for grades
+    grade_value = "N/A" if is_non_insurance else "C"
     return {
         "enziu_index": 0,
-        "grade": {"overall": "C", "clarity": "C", "coverage": "C", "claimsEfficiency": "C"},
+        "grade": {"overall": grade_value, "clarity": grade_value, "coverage": grade_value, "claimsEfficiency": grade_value},
         "score_preview": "medium",
-        "clarity":          {"score": 0, "grade": "C", "sub_scores": {}, "estimated_grade_level": 12, "reasoning": message},
-        "coverage":         {"score": 0, "grade": "C", "sub_scores": {}, "exclusion_count": 0,        "reasoning": message},
-        "claim_efficiency": {"score": 0, "grade": "C", "sub_scores": {}, "appeal_rights_present": False, "payout_days_stated": None, "reasoning": message},
+        "clarity":          {"score": 0, "grade": grade_value, "sub_scores": {}, "estimated_grade_level": 12, "reasoning": message},
+        "coverage":         {"score": 0, "grade": grade_value, "sub_scores": {}, "exclusion_count": 0,        "reasoning": message},
+        "claim_efficiency": {"score": 0, "grade": grade_value, "sub_scores": {}, "appeal_rights_present": False, "payout_days_stated": None, "reasoning": message},
         "red_flags":    [],
         "exclusions":   [],
         "clauses":      [],
         "insight_cards": [],
         "total_deductions": 0,
-        "plain_english_summary": "Document could not be processed.",
+        "plain_english_summary": "Document could not be processed." if not is_non_insurance else "This document does not appear to be an insurance policy.",
         "comparison_ready": {
             "policy_type": "unknown", "carrier_name": None,
             "policy_effective_date": None, "annual_premium_stated": None,
@@ -569,11 +571,13 @@ class InferenceClient:
                 carrier_name = facts.get("carrier_name") or (
                     facts.get("financial_terms") or {}
                 ).get("carrier_name")
+                # Pass through the grades from full_report (may be "N/A" for non-insurance docs)
+                grade = full_report.get("grade", {})
                 return {
-                    "grade":        {"overall": "C", "clarity": "C", "coverage": "C", "claimsEfficiency": "C"},
+                    "grade":        grade,
                     "topRisk":      full_report.get("error", "Document error"),
                     "redFlags":     ["Analysis unavailable"],
-                    "summary":      "Unable to analyze this document.",
+                    "summary":      full_report.get("plain_english_summary", "Unable to analyze this document."),
                     "score_preview": "medium",
                     "policy_type":  policy_type,
                     "carrier_name": carrier_name,
@@ -633,7 +637,9 @@ class InferenceClient:
             facts = await self.extract_facts(text, session_id)
 
             if "error" in facts:
-                error_report = _error_report(str(facts["error"]))
+                error_msg = str(facts["error"])
+                is_non_insurance = "not a recognized insurance policy" in error_msg.lower()
+                error_report = _error_report(error_msg, is_non_insurance=is_non_insurance)
                 self._report_cache[session_id] = error_report
                 return error_report
 

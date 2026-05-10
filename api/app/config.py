@@ -88,7 +88,7 @@ settings = Settings()
 # ============================================================================
 
 # Voucher pack types
-VALID_PACK_TYPES = ("PAYG", "Starter", "Pro", "Office")
+VALID_PACK_TYPES = ("PAYG",)
 
 # Transaction ID prefixes
 TRANSACTION_ID_PREFIX = "txn_"

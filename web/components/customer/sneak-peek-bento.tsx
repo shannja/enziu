@@ -1,8 +1,8 @@
 "use client";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { AlertTriangle, Shield, FileText, ArrowRight } from "lucide-react";
-import { cn, getGradeColor } from "@/lib/utils";
+import { AlertTriangle, Shield, FileText, ArrowRight, Info } from "lucide-react";
+import { cn, getGradeColor, isNaGrade } from "@/lib/utils";
 import { useTheme } from "@/context/ThemeContext";
 import { motion } from "framer-motion";
 import Image from "next/image";
@@ -86,17 +86,24 @@ export function SneakPeekBento({ result }: SneakPeekBentoProps) {
             <CardContent>
               <div
                 className={cn(
-                  "text-6xl font-bold text-gradient",
+                  "text-6xl font-bold",
                   getGradeColor(grade.overall)
                 )}
               >
                 {grade.overall}
               </div>
-              <div className="mt-2 text-sm text-muted-foreground">
-                Clarity <span className={getGradeColor(grade.clarity)}>{grade.clarity}</span> • 
-                Coverage <span className={getGradeColor(grade.coverage)}>{grade.coverage}</span> • 
-                Claims <span className={getGradeColor(grade.claimsEfficiency)}>{grade.claimsEfficiency}</span>
-              </div>
+              {isNaGrade(grade.overall) ? (
+                <div className="mt-3 flex items-start gap-2 text-sm text-muted-foreground">
+                  <Info className="w-4 h-4 mt-0.5 shrink-0" />
+                  <p>This document does not appear to be an insurance policy. Grades are not applicable.</p>
+                </div>
+              ) : (
+                <div className="mt-2 text-sm text-muted-foreground">
+                  Clarity <span className={getGradeColor(grade.clarity)}>{grade.clarity}</span> • 
+                  Coverage <span className={getGradeColor(grade.coverage)}>{grade.coverage}</span> • 
+                  Claims <span className={getGradeColor(grade.claimsEfficiency)}>{grade.claimsEfficiency}</span>
+                </div>
+              )}
             </CardContent>
           </Card>
         </motion.div>

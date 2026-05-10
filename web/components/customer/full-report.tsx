@@ -5,9 +5,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import {
   AlertTriangle, FileText,
-  Loader2, Copy, Check,
+  Loader2, Copy, Check, Info,
 } from "lucide-react";
-import { cn, getGradeColor } from "@/lib/utils";
+import { cn, getGradeColor, isNaGrade } from "@/lib/utils";
 import type { AnalysisResult } from "@/types";
 import { PDFViewer } from "./pdf-viewer";
 import { getPDF, blobToDataURL } from "@/lib/pdf-storage";
@@ -70,6 +70,7 @@ function ScoreBar({
   grade: string;
   description: string;
 }) {
+  const isNa = isNaGrade(grade);
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between">
@@ -79,7 +80,7 @@ function ScoreBar({
         </div>
         <span className={cn("text-lg font-bold", getGradeColor(grade))}>{grade}</span>
       </div>
-      <Progress value={gradeToPercentage(grade)} className="h-2" />
+      {!isNa && <Progress value={gradeToPercentage(grade)} className="h-2" />}
     </div>
   );
 }
@@ -216,6 +217,55 @@ function ExclusionItem({ exclusion }: { exclusion: any }) {
   );
 }
 
+// ─── VoucherCodeCard ──────────────────────────────────────────────────────────
+
+function VoucherCodeCard({ voucherCode }: { voucherCode: string }) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(voucherCode);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      console.error('Failed to copy voucher code:', err);
+    }
+  };
+
+  return (
+    <Card className="border-brand-amber/30 bg-brand-amber/5">
+      <CardContent className="pt-6">
+        <div className="flex items-start gap-3">
+          <div className="flex-1">
+            <p className="text-sm font-medium text-foreground mb-2">
+              Save your recovery key
+            </p>
+            <div className="flex items-center gap-2">
+              <code className="flex-1 px-3 py-2 bg-secondary rounded-md font-mono text-sm text-foreground tracking-wide">
+                {voucherCode}
+              </code>
+              <button
+                onClick={handleCopy}
+                className="p-2 hover:bg-secondary rounded-md transition-colors"
+                title="Copy to clipboard"
+              >
+                {copied ? (
+                  <Check className="w-4 h-4 text-green-500" />
+                ) : (
+                  <Copy className="w-4 h-4 text-muted-foreground" />
+                )}
+              </button>
+            </div>
+            <p className="text-xs text-muted-foreground mt-2">
+              Your data is encrypted locally and never stored on our servers, so this voucher code is the only key that can decrypt and recover your report.
+            </p>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 // ─── FullReport ───────────────────────────────────────────────────────────────
 
 export function FullReport({
@@ -310,7 +360,7 @@ export function FullReport({
       </div>
 
       {/* Two-column: PDF left | Report right */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
 
         {/* LEFT — sticky PDF viewer */}
         <div className="lg:sticky lg:top-24 lg:h-[calc(100vh-8rem)]">
@@ -325,35 +375,53 @@ export function FullReport({
         {/* RIGHT — scores, flags, exclusions */}
         <div className="space-y-6 min-w-0">
 
+          {/* Recovery Voucher Code */}
+          {voucherCode && <VoucherCodeCard voucherCode={voucherCode} />}
+
           {/* ENZIU Index Scores */}
           <Card className="border-border bg-card/50">
             <CardHeader>
               <CardTitle className="text-lg text-gradient">ENZIU Index Scores</CardTitle>
             </CardHeader>
             <CardContent className="space-y-6">
-              <div className="text-center py-4">
-                <div className={cn("text-7xl font-bold mb-2", getGradeColor(grade.overall))}>
-                  {grade.overall}
+              {isNaGrade(grade.overall) ? (
+                <div className="text-center py-4">
+                  <div className={cn("text-7xl font-bold mb-2", getGradeColor(grade.overall))}>
+                    {grade.overall}
+                  </div>
+                  <p className="text-muted-foreground mb-3">Grades Not Applicable</p>
+                  <div className="flex items-start justify-center gap-2 text-sm text-muted-foreground max-w-md mx-auto">
+                    <Info className="w-4 h-4 mt-0.5 shrink-0" />
+                    <p>This document does not appear to be an insurance policy, so the ENZIU Index scoring system does not apply.</p>
+                  </div>
                 </div>
-                <p className="text-muted-foreground">Overall Policy Grade</p>
-              </div>
-              <div className="space-y-4">
-                <ScoreBar
-                  label="Clarity"
-                  grade={grade.clarity}
-                  description="How easy is the policy to understand?"
-                />
-                <ScoreBar
-                  label="Coverage"
-                  grade={grade.coverage}
-                  description="How comprehensive is the protection?"
-                />
-                <ScoreBar
-                  label="Claims Efficiency"
-                  grade={grade.claimsEfficiency}
-                  description="How smooth is the claims process?"
-                />
-              </div>
+              ) : (
+                <>
+                  <div className="text-center py-4">
+                    <div className={cn("text-7xl font-bold mb-2", getGradeColor(grade.overall))}>
+                      {grade.overall}
+                    </div>
+                    <p className="text-muted-foreground">Overall Policy Grade</p>
+                  </div>
+                  <div className="space-y-4">
+                    <ScoreBar
+                      label="Clarity"
+                      grade={grade.clarity}
+                      description="How easy is the policy to understand?"
+                    />
+                    <ScoreBar
+                      label="Coverage"
+                      grade={grade.coverage}
+                      description="How comprehensive is the protection?"
+                    />
+                    <ScoreBar
+                      label="Claims Efficiency"
+                      grade={grade.claimsEfficiency}
+                      description="How smooth is the claims process?"
+                    />
+                  </div>
+                </>
+              )}
             </CardContent>
           </Card>
 

@@ -139,6 +139,44 @@ interface EncryptedPayload {
   createdAt: number;
 }
 
+function isEncryptedPayload(value: any): value is EncryptedPayload {
+  return !!(
+    value &&
+    typeof value === "object" &&
+    Array.isArray(value.salt) &&
+    Array.isArray(value.iv) &&
+    Array.isArray(value.ciphertext)
+  );
+}
+
+/**
+ * Generic AES-GCM payload decryptor using session-derived key.
+ */
+async function decryptSessionPayload(
+  sessionId: string,
+  payload: EncryptedPayload
+): Promise<any | null> {
+  try {
+    const salt = new Uint8Array(payload.salt);
+    const iv = new Uint8Array(payload.iv);
+    const ciphertext = new Uint8Array(payload.ciphertext);
+
+    const key = await deriveSessionKey(sessionId, salt);
+
+    const plaintext = await crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv: iv.buffer as ArrayBuffer },
+      key,
+      ciphertext
+    );
+
+    const decoder = new TextDecoder();
+    return JSON.parse(decoder.decode(plaintext));
+  } catch (err) {
+    console.error('[decryptSessionPayload] Failed:', err);
+    return null;
+  }
+}
+
 /**
  * Store an encrypted fact sheet in IndexedDB using session-based encryption.
  * The data is encrypted with AES-256-GCM using a key derived from the session ID.
@@ -483,13 +521,14 @@ export async function decryptFromSessionStorage(
   }
 }
 
+type FactSheetData = Record<string, any>;
+
 interface RecoveryVaultData {
-  factSheet: any;
-  extractedText: string;
+  factSheet: FactSheetData | EncryptedPayload;
+  extractedText: string | null;
   sessionId: string;
   pdfData?: string;
 }
-
 /**
  * Store an encrypted recovery vault in IndexedDB.
  * The key is SHA256(voucherCode) — meaningless without the code.
@@ -562,6 +601,7 @@ export async function getRecoveryVault(
     request.onsuccess = async () => {
       const result = request.result as VaultRecord | undefined;
       if (!result || !result.factSheet) {
+        console.log('[getRecoveryVault] No vault found for this voucher code');
         resolve(null);
         return;
       }
@@ -575,6 +615,7 @@ export async function getRecoveryVault(
         };
         
         if (!encrypted.salt || !encrypted.iv || !encrypted.ciphertext) {
+          console.log('[getRecoveryVault] Invalid encrypted payload structure');
           resolve(null);
           return;
         }
@@ -592,10 +633,51 @@ export async function getRecoveryVault(
         );
         
         const decoder = new TextDecoder();
-        const data = JSON.parse(decoder.decode(plaintext)) as RecoveryVaultData;
+        const rawData = decoder.decode(plaintext);
+        console.log('[getRecoveryVault] Raw decrypted data length:', rawData.length);
+        console.log('[getRecoveryVault] Raw decrypted data preview:', rawData.substring(0, 200) + '...');
+        
+        const data = JSON.parse(rawData) as RecoveryVaultData;
+        // Defensive recovery:
+        // older vaults may contain nested encrypted factSheet payloads
+        if (
+          data.factSheet &&
+          typeof data.factSheet === "object" &&
+          Array.isArray(data.factSheet.salt) &&
+          Array.isArray(data.factSheet.iv) &&
+          Array.isArray(data.factSheet.ciphertext)
+        ) {
+          console.log("[getRecoveryVault] Nested encrypted factSheet detected");
+
+          const decryptedFactSheet = await decryptSessionPayload(
+            data.sessionId,
+            data.factSheet
+          );
+
+          if (decryptedFactSheet) {
+            data.factSheet = decryptedFactSheet;
+
+            console.log(
+              "[getRecoveryVault] Nested factSheet decrypted successfully"
+            );
+          } else {
+            console.error(
+              "[getRecoveryVault] Failed to decrypt nested factSheet"
+            );
+          }
+        }
+        console.log('[getRecoveryVault] Parsed RecoveryVaultData:');
+        console.log('  - sessionId:', data.sessionId);
+        console.log('  - extractedText length:', data.extractedText?.length);
+        console.log('  - pdfData present:', !!data.pdfData);
+        console.log('  - factSheet keys:', data.factSheet ? Object.keys(data.factSheet) : 'null');
+        console.log('  - factSheet has grade:', data.factSheet?.grade ? 'yes' : 'no');
+        console.log('  - factSheet has red_flags:', Array.isArray(data.factSheet?.red_flags) ? 'yes' : 'no');
+        
         resolve(data);
-      } catch {
+      } catch (error) {
         // Decryption failed — wrong voucher code or corrupted data
+        console.error('[getRecoveryVault] Decryption or parsing failed:', error);
         resolve(null);
       }
     };
