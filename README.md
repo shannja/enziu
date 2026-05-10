@@ -39,13 +39,13 @@ ENZIU uses a **two-phase agentic workflow** where specialized AI agents coordina
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                        PDF Upload                                │
-│                    (io.BytesIO — Zero Disk)                      │
+│                        PDF Upload                               │
+│                    (io.BytesIO — Zero Disk)                     │
 └────────────────────────────┬────────────────────────────────────┘
                              │
                              ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│  AGENT 1: ENZIU Extractor (Llama 4 Scout 17B — 890K context)   │
+│  AGENT 1: ENZIU Extractor (Llama 4 Scout 17B — 890K context)    │
 │  ─────────────────────────────────────────────────────────────  │
 │  • Extracts 18 categories of structured facts (A–R)             │
 │  • Performs legal risk scan as bad-faith attorney               │
@@ -55,7 +55,7 @@ ENZIU uses a **two-phase agentic workflow** where specialized AI agents coordina
                              │
                              ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│  AGENT 2: ENZIU Auditor (Llama 3.3 70B — 131K context)         │
+│  AGENT 2: ENZIU Auditor (Llama 3.3 70B — 131K context)          │
 │  ─────────────────────────────────────────────────────────────  │
 │  • Scores Clarity (0–30 pts): reading grade, jargon, navigation │
 │  • Scores Coverage (0–40 pts): exclusions, waiting periods      │
@@ -67,7 +67,7 @@ ENZIU uses a **two-phase agentic workflow** where specialized AI agents coordina
                              │
                              ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                    ENZIU Index Calculation                       │
+│                    ENZIU Index Calculation                      │
 │  ─────────────────────────────────────────────────────────────  │
 │  base_score = clarity + coverage + claims (max 100)             │
 │  enziu_index = base_score − red_flag_deductions (cap 40)        │
@@ -76,11 +76,11 @@ ENZIU uses a **two-phase agentic workflow** where specialized AI agents coordina
                              │
                              ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│              Client-Side Encrypted Storage (IndexedDB)           │
+│              Client-Side Encrypted Storage (IndexedDB)          │
 │  ─────────────────────────────────────────────────────────────  │
 │  • AES-256-GCM encryption with PBKDF2 key derivation            │
 │  • Recovery Vault keyed by SHA256(voucher_code)                 │
-│  • Zero server-side persistence                                  │
+│  • Zero server-side persistence                                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
