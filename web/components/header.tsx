@@ -85,7 +85,6 @@ export function Header({ mode, onModeChange, hideToggle = false }: HeaderProps) 
                 <div
                   key={m.value}
                   className="relative group"
-                  title={isDisabled ? m.tooltip : undefined}
                 >
                   <button
                     onClick={() => !isDisabled && onModeChange(m.value as Mode)}
@@ -103,9 +102,9 @@ export function Header({ mode, onModeChange, hideToggle = false }: HeaderProps) 
                     {isDisabled && <Lock className="w-3 h-3" />}
                   </button>
                   {isDisabled && (
-                    <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-1.5 bg-popover text-popover-foreground text-xs rounded-md shadow-lg opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none whitespace-nowrap">
+                    <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 px-3 py-1.5 bg-popover text-popover-foreground text-xs rounded-md shadow-lg opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none whitespace-nowrap">
                       {m.tooltip}
-                      <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-popover"></div>
+                      <div className="absolute bottom-full left-1/2 -translate-x-1/2 border-4 border-transparent border-b-popover"></div>
                     </div>
                   )}
                 </div>

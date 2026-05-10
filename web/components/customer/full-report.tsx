@@ -34,9 +34,16 @@ const RISK_BADGE: Record<string, string> = {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function fireHighlight(page: number, excerpt?: string) {
+/**
+ * Fire an enziu-highlight event. Uses excerpt-driven navigation so PDFViewer
+ * searches all pages for the text — avoiding cover-page / TOC offset issues.
+ * page is passed as a hint only; PDFViewer will still scan all pages.
+ */
+function fireHighlight(excerpt: string, page?: number) {
   window.dispatchEvent(
-    new CustomEvent("enziu-highlight", { detail: { page, excerpt } }),
+    new CustomEvent("enziu-highlight", {
+      detail: { page: page ?? 1, excerpt },
+    }),
   );
 }
 
@@ -79,17 +86,13 @@ function ScoreBar({
 
 // ─── RedFlagItem ──────────────────────────────────────────────────────────────
 
-function RedFlagItem({
-  flag,
-}: {
-  flag: any;
-}) {
+function RedFlagItem({ flag }: { flag: any }) {
   const hasExcerpt = flag.excerpt != null && flag.excerpt.length > 0;
   const plainEnglish = stripWarningPrefix(flag.plain_english ?? "");
 
   const handleClick = () => {
     if (!hasExcerpt) return;
-    fireHighlight(1, flag.excerpt ?? undefined);
+    fireHighlight(flag.excerpt, flag.page ?? undefined);
   };
 
   return (
@@ -133,7 +136,7 @@ function RedFlagItem({
         <p className="text-xs text-muted-foreground">Legal basis: {flag.legal_basis}</p>
       )}
 
-      {/* Navigate to excerpt badge */}
+      {/* Navigate to excerpt badge — no page number shown */}
       {hasExcerpt && (
         <span className="inline-flex items-center gap-1 text-xs text-brand-amber bg-brand-amber/10 px-2 py-0.5 rounded">
           <FileText className="w-3 h-3" />
@@ -146,30 +149,36 @@ function RedFlagItem({
 
 // ─── ExclusionItem ────────────────────────────────────────────────────────────
 //
-// NOTE: The Auditor JSON schema does NOT emit an `excerpt` field on exclusions[].
-// We guard with optional chaining so the component is safe if the field is ever
-// added upstream, but we do not render a blockquote when it is absent.
+// Exclusions from the Auditor schema include a `page` field but no `excerpt`.
+// We support excerpt if it is ever added upstream, and fall back to page-only
+// navigation (fireHighlight with no excerpt) so the viewer at least jumps to
+// the correct page even without text highlighting.
 
-function ExclusionItem({
-  exclusion,
-}: {
-  exclusion: any;
-}) {
+function ExclusionItem({ exclusion }: { exclusion: any }) {
   const hasExcerpt = exclusion.excerpt != null && exclusion.excerpt.length > 0;
+  // An exclusion is navigable if it has an excerpt OR a valid page number.
+  const hasPage = exclusion.page != null && exclusion.page > 0;
+  const isNavigable = hasExcerpt || hasPage;
 
   const handleClick = () => {
-    if (!hasExcerpt) return;
-    fireHighlight(1, exclusion.excerpt ?? undefined);
+    if (!isNavigable) return;
+    if (hasExcerpt) {
+      fireHighlight(exclusion.excerpt, exclusion.page ?? undefined);
+    } else {
+      // No excerpt — jump to the page using a fragment of the exclusion type
+      // as a best-effort search hint.
+      fireHighlight(exclusion.type ?? "", exclusion.page);
+    }
   };
 
   return (
     <button
       onClick={handleClick}
-      disabled={!hasExcerpt}
+      disabled={!isNavigable}
       className={cn(
         "w-full text-left border rounded-lg p-4 transition-all duration-200 space-y-3",
         "bg-secondary/20",
-        hasExcerpt
+        isNavigable
           ? "cursor-pointer hover:scale-[1.02] hover:shadow-md border-brand-grade-d/30"
           : "cursor-default border-border",
       )}
@@ -189,15 +198,15 @@ function ExclusionItem({
       {/* Summary */}
       <p className="text-sm text-muted-foreground">{exclusion.summary}</p>
 
-      {/* Excerpt */}
-      {exclusion.excerpt && (
+      {/* Excerpt (if present) */}
+      {hasExcerpt && (
         <blockquote className="w-full text-xs text-muted-foreground italic border-l-2 border-brand-amber pl-2 line-clamp-3">
           &ldquo;{exclusion.excerpt}&rdquo;
         </blockquote>
       )}
 
-      {/* Navigate to excerpt badge */}
-      {hasExcerpt && (
+      {/* Navigate badge — no page number shown */}
+      {isNavigable && (
         <span className="inline-flex items-center gap-1 text-xs text-brand-amber bg-brand-amber/10 px-2 py-0.5 rounded">
           <FileText className="w-3 h-3" />
           Navigate to Excerpt
@@ -208,10 +217,6 @@ function ExclusionItem({
 }
 
 // ─── FullReport ───────────────────────────────────────────────────────────────
-//
-// Insight cards are intentionally EXCLUDED from this component.
-// They are rendered exclusively inside <DeepDiveQuestions /> (deep-dive-questions.tsx)
-// so users see them only in the Policy Q&A tab, not duplicated in the full report.
 
 export function FullReport({
   result,
@@ -288,7 +293,7 @@ export function FullReport({
       <div>
         <h2 className="text-2xl font-bold text-foreground mb-1">Your Full ENZIU Report</h2>
         <p className="text-sm text-muted-foreground">
-          Click any page citation to jump there. Excerpts are highlighted in yellow.
+          Click any item to navigate to its excerpt in the policy.
         </p>
         {isGenerating && (
           <div className="flex items-center gap-2 mt-2 text-gradient text-sm">
@@ -317,7 +322,7 @@ export function FullReport({
           />
         </div>
 
-        {/* RIGHT — scores, flags, voucher, exclusions */}
+        {/* RIGHT — scores, flags, exclusions */}
         <div className="space-y-6 min-w-0">
 
           {/* ENZIU Index Scores */}
@@ -368,41 +373,6 @@ export function FullReport({
               </CardContent>
             </Card>
           )}
-
-          {/* Voucher Code */}
-          {/* {voucherCode && (
-            <Card className="border-brand-amber/30 bg-brand-amber/5">
-              <CardContent className="pt-4 flex items-center justify-between gap-4">
-                <div>
-                  <p className="text-xs text-muted-foreground mb-1">Your voucher code</p>
-                  <p className="text-lg font-mono font-bold text-brand-amber tracking-widest">
-                    {voucherCode}
-                  </p>
-                  <p className="text-xs text-muted-foreground">
-                    Remember to save the code.
-                    <br />
-                    <br />
-                    The report is saved locally on your device but is encrypted. Use the code
-                    to recover it.
-                  </p>
-                </div>
-                <button
-                  onClick={() => {
-                    navigator.clipboard.writeText(voucherCode);
-                    setCopyFeedback(true);
-                    setTimeout(() => setCopyFeedback(false), 2000);
-                  }}
-                  className="p-2 rounded-lg bg-brand-amber/20 hover:bg-brand-amber/30 transition-colors"
-                >
-                  {copyFeedback ? (
-                    <Check className="w-4 h-4 text-brand-amber" />
-                  ) : (
-                    <Copy className="w-4 h-4 text-brand-amber" />
-                  )}
-                </button>
-              </CardContent>
-            </Card>
-          )} */}
 
           {/* Material Exclusions */}
           {validExclusions.length > 0 && (

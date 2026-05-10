@@ -13,16 +13,8 @@ const nextConfig = {
     ];
   },
 
-  // Extend proxy timeout for long-running endpoints (full analysis can take ~5 min).
-  // Next.js uses this value (ms) for its internal http-proxy keep-alive timeout.
-  httpAgentOptions: {
-    keepAlive: true,
-  },
-  // The canonical way to raise the underlying Node http timeout for rewrites:
-  experimental: {
-    // proxyTimeout was added in Next.js 14.1 — set to 6 minutes (ms)
-    proxyTimeout: 540_000,
-  },
+  httpAgentOptions: { keepAlive: true },
+  experimental: { proxyTimeout: 540_000 },
 
   async headers() {
     return [
@@ -38,11 +30,12 @@ const nextConfig = {
             key: "Content-Security-Policy",
             value: [
               "default-src 'self'",
-              "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://sandbox-cdn.paddle.com https://cdn.paddle.com https://cdnjs.cloudflare.com",
-              "script-src-elem 'self' 'unsafe-inline' https://sandbox-cdn.paddle.com https://cdn.paddle.com https://cdnjs.cloudflare.com",
+              "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://sandbox-cdn.paddle.com https://cdn.paddle.com https://cdnjs.cloudflare.com https://public.profitwell.com",
+              "script-src-elem 'self' 'unsafe-inline' https://sandbox-cdn.paddle.com https://cdn.paddle.com https://cdnjs.cloudflare.com https://public.profitwell.com",
+              "worker-src 'self' blob:",   // ✅ allows PDF.js blob workers
               "frame-src 'self' https://sandbox-buy.paddle.com https://buy.paddle.com",
-              "frame-ancestors 'self'",
-              "connect-src 'self' https://sandbox-api.paddle.com https://sandbox-checkout-service.paddle.com https://sandbox-buy.paddle.com https://api.paddle.com",
+              "frame-ancestors 'self' https://enziu.vercel.app http://localhost:3000 http://localhost",
+              "connect-src 'self' https://sandbox-api.paddle.com https://sandbox-checkout-service.paddle.com https://sandbox-buy.paddle.com https://api.paddle.com https://checkout-service.paddle.com https://buy.paddle.com https://cdn.paddle.com",
               "style-src 'self' 'unsafe-inline' https://sandbox-cdn.paddle.com https://cdn.paddle.com",
               "style-src-elem 'self' 'unsafe-inline' https://sandbox-cdn.paddle.com https://cdn.paddle.com",
               "img-src 'self' data: https://sandbox-cdn.paddle.com https://cdn.paddle.com",

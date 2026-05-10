@@ -63,39 +63,27 @@ RATE_LIMITS = {
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     """Add security headers to all responses.
     
-    IMPORTANT: CSP is intentionally restricted to API routes only.
-    Next.js manages its own CSP for HTML pages via next.config.js headers().
-    Applying a broad CSP here would overwrite the Next.js one (which includes
-    the Paddle-specific directives), breaking the checkout iframe.
+    CSP is intentionally omitted — Next.js owns it via next.config.js headers().
     """
-
-    # Minimal API-only CSP — APIs don't serve HTML or load external resources
-    API_CSP = "default-src 'none'; frame-ancestors 'none';"
 
     async def dispatch(
         self, request: Request, call_next: Callable[[Request], Awaitable[JSONResponse]]
     ) -> JSONResponse:
         response = await call_next(request)
 
-        # Common security headers — safe to apply everywhere
+        # Common security headers
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-XSS-Protection"] = "1; mode=block"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
 
-        # Only set CSP (and X-Frame-Options) on API routes.
-        # Next.js owns the CSP for HTML pages — if we set it here it
-        # overwrites the Paddle-compatible policy in next.config.js.
         if request.url.path.startswith("/api/"):
-            response.headers["Content-Security-Policy"] = self.API_CSP
             response.headers["X-Frame-Options"] = "DENY"
 
-        # HSTS (only in production)
         if not settings.debug:
             response.headers["Strict-Transport-Security"] = (
                 "max-age=31536000; includeSubDomains; preload"
             )
 
-        # Remove server fingerprinting headers
         if "Server" in response.headers:
             del response.headers["Server"]
         if "X-Powered-By" in response.headers:
