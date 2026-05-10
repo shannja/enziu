@@ -29,7 +29,7 @@ ENZIU is a **multi-agent AI auditing system** that doesn't just read your policy
 | **Method** | General analysis | 100+ point criteria across 3 dimensions |
 | **Privacy** | Data may be stored | Zero server storage, client-side encryption |
 | **Citations** | May hallucinate | Page-verified, excerpt-backed |
-| **Legal Standard** | General knowledge | Licensed attorney standard per jurisdiction |
+| **Legal Standard** | General knowledge | Dynamic; Based on document source |
 
 ---
 
