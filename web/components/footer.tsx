@@ -37,13 +37,13 @@ export function Footer() {
         {isCustomerMode ? (
           /* Customer mode: centered copyright only */
           <p className="text-xs text-muted-foreground tracking-tight">
-            &copy; {currentYear} Enziu. All rights reserved.
+            &copy; {currentYear} Enziu. All rights reserved. Made on AMD Developer Hackathon 2026. Not a Real Product.
           </p>
         ) : (
           /* Broker mode: flex layout with copyright and voucher link */
           <div className="flex flex-col md:flex-row justify-between items-center gap-6">
             <p className="text-xs text-muted-foreground tracking-tight">
-              &copy; {currentYear} Enziu. All rights reserved.
+              &copy; {currentYear} Enziu. All rights reserved. Made on AMD Developer Hackathon 2026. Not a Real Product.
             </p>
             
             {/* Need Help: Gradient text by default, Underline on hover */}
