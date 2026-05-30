@@ -270,8 +270,13 @@ export function CustomerMode() {
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || "/api";
       const response = await fetch(`${apiUrl}/api/extract`, { method: "POST", body: formData });
       if (!response.ok) {
-        const error = await response.json().catch(() => ({}));
-        throw new Error(error.detail || "Upload failed");
+        const errorData = await response.json().catch(() => ({}));
+        // Extract human-readable error message from structured API errors
+        const errorMessage = 
+          typeof errorData.detail === 'string' 
+            ? errorData.detail 
+            : errorData.detail?.message || errorData.detail?.error || "Upload failed";
+        throw new Error(errorMessage);
       }
       const result = await response.json();
       setAnalysisResult(result);
