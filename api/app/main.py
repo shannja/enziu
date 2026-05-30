@@ -176,6 +176,29 @@ async def extract_policy(request: Request, file: UploadFile = File(...)):
                 detail="Scanned documents are not supported in this version. Please upload a digital PDF."
             )
 
+        # Pre-processing validation: Check if this appears to be an insurance policy
+        buffer.seek(0)
+        insurance_validation = pdf_extractor.is_insurance_policy(buffer)
+        buffer.seek(0)  # Reset buffer for subsequent processing
+
+        if not insurance_validation["is_insurance"]:
+            logger.warning(
+                f"Non-insurance document rejected - session={session_id}, "
+                f"type={insurance_validation['detected_type']}, "
+                f"confidence={insurance_validation['confidence']:.2f}"
+            )
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "not_insurance_policy",
+                    "message": "This document does not appear to be an insurance policy.",
+                    "detected_type": insurance_validation["detected_type"],
+                    "confidence": insurance_validation["confidence"],
+                    "reasons": insurance_validation["reasons"],
+                    "hint": "ENZIU is designed specifically for analyzing insurance policies. Please upload a valid insurance policy PDF (health, life, auto, home, etc.)."
+                }
+            )
+
         extracted_text = pdf_extractor.extract_text_json(buffer)
 
         if not extracted_text or len(extracted_text.strip()) == 0:

@@ -509,3 +509,242 @@ class PDFExtractor:
         finally:
             doc.close()
             logger.debug("PDF document closed")
+
+    def is_insurance_policy(self, buffer: io.BytesIO) -> dict[str, Any]:
+        """
+        Validate whether a PDF appears to be an insurance policy.
+        
+        This is a fast, rule-based check that runs BEFORE sending to AI models.
+        It checks for insurance-specific keywords, document structure, and text density.
+        
+        Args:
+            buffer: io.BytesIO buffer containing PDF data
+            
+        Returns:
+            dict with:
+                - is_insurance: bool - Whether this appears to be an insurance policy
+                - confidence: float - Confidence score (0.0 to 1.0)
+                - reasons: list[str] - List of reasons for the determination
+                - detected_type: str - Detected document type if not insurance
+        """
+        start_time = time.time()
+        logger.debug("Validating if PDF is an insurance policy")
+        
+        try:
+            doc = fitz.open(stream=buffer, filetype="pdf")
+            page_count = len(doc)
+            
+            # Check 1: Minimum page count (insurance policies are typically multi-page)
+            if page_count < 3:
+                elapsed = time.time() - start_time
+                logger.info(f"Document rejected: too few pages ({page_count})")
+                return {
+                    "is_insurance": False,
+                    "confidence": 0.9,
+                    "reasons": [f"Document has only {page_count} pages. Insurance policies typically have multiple pages."],
+                    "detected_type": "short_document"
+                }
+            
+            # Check 2: Extract text from first few pages for analysis
+            pages_to_analyze = min(5, page_count)
+            sample_text_parts: list[str] = []
+            total_chars = 0
+            empty_pages = 0
+            
+            for page_num in range(pages_to_analyze):
+                page = doc[page_num]
+                text = page.get_text("text")
+                if text.strip():
+                    sample_text_parts.append(text.lower())
+                    total_chars += len(text)
+                else:
+                    empty_pages += 1
+            
+            # Check 3: Text density (reject if mostly empty or scanned)
+            avg_chars_per_page = total_chars / pages_to_analyze if pages_to_analyze > 0 else 0
+            if avg_chars_per_page < 200:
+                elapsed = time.time() - start_time
+                logger.info(f"Document rejected: too little text (avg {avg_chars_per_page:.0f} chars/page)")
+                return {
+                    "is_insurance": False,
+                    "confidence": 0.85,
+                    "reasons": ["Document contains very little text. It may be a scanned image or non-text PDF."],
+                    "detected_type": "scanned_or_image"
+                }
+            
+            # Check 4: If most analyzed pages are empty, likely scanned
+            if empty_pages >= pages_to_analyze * 0.8:
+                elapsed = time.time() - start_time
+                logger.info(f"Document rejected: {empty_pages}/{pages_to_analyze} pages empty")
+                return {
+                    "is_insurance": False,
+                    "confidence": 0.9,
+                    "reasons": ["Most pages contain no extractable text. This appears to be a scanned document."],
+                    "detected_type": "scanned_document"
+                }
+            
+            sample_text = "\n".join(sample_text_parts)
+            
+            # Insurance-specific keywords and phrases
+            insurance_keywords = {
+                # Core insurance terms
+                "policy": 3,
+                "coverage": 3,
+                "insured": 2,
+                "insurer": 2,
+                "insurance": 3,
+                "carrier": 2,
+                "premium": 2,
+                "deductible": 2,
+                "claim": 2,
+                "beneficiary": 2,
+                
+                # Policy structure terms
+                "declarations": 2,
+                "exclusion": 2,
+                "endorsement": 1,
+                "rider": 1,
+                "conditions": 1,
+                "provisions": 1,
+                
+                # Coverage types
+                "coverage a": 1,
+                "coverage b": 1,
+                "coverage c": 1,
+                "coverage d": 1,
+                "liability": 1,
+                "property": 1,
+                "medical": 1,
+                "hospital": 1,
+                "health": 1,
+                "life insurance": 2,
+                "auto insurance": 2,
+                "homeowners": 1,
+                "home insurance": 2,
+                
+                # Legal/contract terms
+                "hereby": 1,
+                "whereas": 1,
+                "thereof": 1,
+                "thereunder": 1,
+                "pursuant": 1,
+            }
+            
+            # Non-insurance document indicators
+            non_insurance_keywords = {
+                "resume": 3,
+                "curriculum vitae": 3,
+                "work experience": 2,
+                "education": 2,
+                "invoice": 2,
+                "receipt": 2,
+                "menu": 2,
+                "newsletter": 2,
+                "brochure": 2,
+                "advertisement": 2,
+                "catalog": 2,
+                "user manual": 2,
+                "instruction": 2,
+                "recipe": 2,
+                "novel": 2,
+                "story": 1,
+                "chapter": 1,
+            }
+            
+            # Calculate insurance score
+            insurance_score = 0
+            for keyword, weight in insurance_keywords.items():
+                count = sample_text.count(keyword)
+                if count > 0:
+                    insurance_score += min(count * weight, weight * 3)  # Cap at 3x weight
+            
+            # Calculate non-insurance score
+            non_insurance_score = 0
+            for keyword, weight in non_insurance_keywords.items():
+                count = sample_text.count(keyword)
+                if count > 0:
+                    non_insurance_score += min(count * weight, weight * 3)
+            
+            # Check for insurance-specific patterns
+            has_policy_number = bool(re.search(r'policy\s*(number|no\.?|#|:)\s*[a-z0-9-]+', sample_text))
+            has_effective_date = bool(re.search(r'(effective\s+date|policy\s+period|coverage\s+period)', sample_text))
+            has_premium_amount = bool(re.search(r'\$\s*\d+[\d,]*(\.\d+)?\s*(per\s+year|annual|monthly|premium)', sample_text))
+            
+            # Boost score for structural patterns
+            if has_policy_number:
+                insurance_score += 5
+            if has_effective_date:
+                insurance_score += 5
+            if has_premium_amount:
+                insurance_score += 3
+            
+            # Determine threshold
+            # A typical insurance policy should score 15+ points
+            INSURANCE_THRESHOLD = 15
+            
+            is_insurance = insurance_score >= INSURANCE_THRESHOLD and insurance_score > non_insurance_score * 2
+            
+            # Calculate confidence
+            if is_insurance:
+                confidence = min(0.95, 0.5 + (insurance_score - INSURANCE_THRESHOLD) / 50)
+            else:
+                confidence = min(0.9, 0.5 + (non_insurance_score / 30))
+            
+            elapsed = time.time() - start_time
+            logger.info(
+                f"Insurance validation completed - is_insurance={is_insurance}, "
+                f"insurance_score={insurance_score}, non_insurance_score={non_insurance_score}, "
+                f"confidence={confidence:.2f}, time={elapsed:.3f}s"
+            )
+            
+            if is_insurance:
+                return {
+                    "is_insurance": True,
+                    "confidence": confidence,
+                    "reasons": [
+                        f"Found {len([k for k in insurance_keywords if sample_text.count(k) > 0])} insurance-related keywords",
+                        f"Insurance score: {insurance_score:.1f} (threshold: {INSURANCE_THRESHOLD})",
+                    ],
+                    "detected_type": "insurance_policy"
+                }
+            else:
+                reasons = [
+                    f"Insurance score: {insurance_score:.1f} (threshold: {INSURANCE_THRESHOLD})",
+                    f"Non-insurance score: {non_insurance_score:.1f}",
+                ]
+                
+                if non_insurance_score > 0:
+                    reasons.append("Document contains keywords typical of non-insurance documents")
+                
+                detected_type = "unknown"
+                if non_insurance_score > 10:
+                    if any(k in sample_text for k in ["resume", "curriculum", "work experience"]):
+                        detected_type = "resume_or_cv"
+                    elif any(k in sample_text for k in ["invoice", "receipt", "bill"]):
+                        detected_type = "financial_document"
+                    elif any(k in sample_text for k in ["user manual", "instruction", "guide"]):
+                        detected_type = "manual_or_guide"
+                    elif any(k in sample_text for k in ["novel", "story", "chapter"]):
+                        detected_type = "literary_work"
+                
+                return {
+                    "is_insurance": False,
+                    "confidence": confidence,
+                    "reasons": reasons,
+                    "detected_type": detected_type
+                }
+            
+        except Exception as e:
+            elapsed = time.time() - start_time
+            logger.error(f"Insurance validation failed after {elapsed:.3f}s: {e}")
+            return {
+                "is_insurance": False,
+                "confidence": 0.5,
+                "reasons": [f"Error during validation: {str(e)}"],
+                "detected_type": "error"
+            }
+        finally:
+            try:
+                doc.close()
+            except:
+                pass
