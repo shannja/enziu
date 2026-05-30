@@ -573,6 +573,26 @@ class InferenceClient:
                 ).get("carrier_name")
                 # Pass through the grades from full_report (may be "N/A" for non-insurance docs)
                 grade = full_report.get("grade", {})
+                
+                # Check if this is a non-insurance document error
+                error_msg = full_report.get("error", "")
+                is_non_insurance = "not a recognized insurance policy" in error_msg.lower()
+                
+                # Return clear error message for non-insurance documents
+                if is_non_insurance:
+                    return {
+                        "grade":        grade,
+                        "topRisk":      "This document does not appear to be an insurance policy.",
+                        "redFlags":     ["Non-insurance document detected"],
+                        "summary":      "ENZIU is designed specifically for analyzing insurance policies. Please upload a valid insurance policy PDF to receive an analysis. Supported documents include health insurance, life insurance, auto insurance, home insurance, and other insurance contracts.",
+                        "score_preview": "medium",
+                        "policy_type":  "other",
+                        "carrier_name": carrier_name,
+                        "full_report":  full_report,
+                        "is_non_insurance": True,
+                    }
+                
+                # For other errors, return the generic error response
                 return {
                     "grade":        grade,
                     "topRisk":      full_report.get("error", "Document error"),
